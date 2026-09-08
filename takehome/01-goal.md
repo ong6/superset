@@ -63,8 +63,9 @@ targets than a narrow subsystem-specific guard.
 ## Required system loop
 
 ```text
-failed pull-request workflow event
+failed review-ready pull-request workflow event
   -> controller validates and deduplicates delivery
+  -> controller rejects draft-origin, currently-draft, and stale-SHA runs
   -> controller resolves pull request, immutable SHA, failed job, and artifacts
   -> deterministic preflight selects and reruns the smallest relevant command
   -> controller creates an investigator Devin session
