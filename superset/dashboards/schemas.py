@@ -58,7 +58,7 @@ screenshot_query_schema = {
         "thumb_size": width_height_schema,
     },
 }
-dashboard_title_description = "A title for the dashboard."
+dashboard_title_description = "The display title for the dashboard."
 description_description = "A description for the dashboard."
 slug_description = "Unique identifying part for the web address of the dashboard."
 editors_description = (
