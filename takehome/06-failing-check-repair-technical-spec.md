@@ -84,8 +84,9 @@ GitHub failed check event
   -> FastAPI webhook
   -> EventValidator
   -> PullRequestResolver
-  -> IdempotencyStore
+  -> DeliveryAndAttemptClaim
   -> EvidenceCollector
+  -> CanonicalFailureClaim
   -> ReplaySandbox
   -> DevinSessionBroker(investigator)
   -> StructuredOutputValidator
@@ -104,7 +105,7 @@ GitHub failed check event
 |---|---|---|
 | Webhook/API | HTTP validation, HMAC, payload schema, delivery ID, provider-resolved event age. | Repository trust decisions by payload URL alone. |
 | Resolver | Repository ID, PR number, head SHA, fork/trust state, workflow/job mapping. | Guessing if the event maps to multiple PRs. |
-| Idempotency store | Atomic delivery and failure-key claims. | In-memory duplicate suppression. |
+| Idempotency store | Atomic delivery/attempt claim before evidence and canonical failure claim after fingerprinting. | In-memory duplicate suppression or a failure-key claim before evidence exists. |
 | Evidence collector | Logs, JUnit, annotations, workflow file, changed paths, artifact hashes. | Unbounded log ingestion or secret-bearing raw dumps into Devin. |
 | Replay sandbox | Clean checkout, pinned command, resource limits, normalized output. | Commands suggested by model output or untrusted logs. |
 | Session broker | Devin API creation, tags, polling, deadlines, structured-output retrieval. | Treating Devin output as authorization or proof. |
@@ -118,16 +119,18 @@ GitHub failed check event
 ### Accepted event shape
 
 The production entry point accepts GitHub `workflow_run.completed` payloads
-from `Python-Unit` only when the conclusion is failure-like and the event maps
-to exactly one open, non-draft pull request. The uploaded source
-`pull_request` event must also show `draft: false`; a draft-originated run never
-becomes eligible because the pull request was marked ready before webhook
-processing. Later adapters can add `check_suite` or `check_run` inputs after
-they pass the same validation and proof gates. Local demos use a saved
-normalized event with the same internal fields.
+from `Python-Unit` only when the conclusion is `failure` and the envelope maps
+to exactly one pull-request candidate. The worker marks the attempt eligible
+only when the uploaded source `pull_request` event also shows `draft: false`
+and a fresh API lookup shows the same open, non-draft PR and head SHA. A
+draft-originated run never becomes eligible because the pull request was
+marked ready before webhook processing. Later adapters can add `check_suite`
+or `check_run` inputs after they pass the same validation and proof gates.
+Local demos use a saved normalized event with the same internal fields.
 
 ```json
 {
+  "schema_version": "ci-rescue-event/v1",
   "provider": "github",
   "repository_id": 123456789,
   "repository_full_name": "ong6/superset",
@@ -138,17 +141,35 @@ normalized event with the same internal fields.
   "workflow_run_id": 9876543210,
   "workflow_name": "Python-Unit",
   "workflow_conclusion": "failure",
+  "workflow_completed_at": "2026-09-08T10:00:00Z",
   "pull_request_number": 42,
+  "intake_pull_request_state": "open",
+  "intake_pull_request_draft": false,
+  "source_event_name": "pull_request",
   "source_pull_request_action": "ready_for_review",
   "source_pull_request_draft": false,
+  "source_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "live_pull_request_state": "open",
   "live_pull_request_draft": false,
   "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "head_ref": "devin/report-budget-regression",
   "base_ref": "master",
   "is_fork": false,
-  "sender_login": "maintainer"
+  "workflow_actor_login": "contributor"
 }
 ```
+
+`delivery_id` is a bounded opaque provider identifier, not a UUID contract.
+`base_sha` is the accepted pull request's exact provider-resolved base commit,
+not the moving base branch or merge-base. `workflow_actor_login` is retained
+for audit only and cannot authorize repair.
+
+The webhook intake model ends before the `source_pull_request_*` fields because
+GitHub stores those in Superset's uploaded `Event File`, not in the
+`workflow_run` webhook. Intake claims the delivery/workflow attempt and returns
+`202`. The worker safely parses that artifact, refreshes live PR state, and
+only then constructs the full normalized failure shown above.
 
 ### Validation gates
 
@@ -157,58 +178,174 @@ Reject before any sandbox, Devin, or GitHub publishing side effect when:
 - signature, content type, payload size, delivery ID, or event/action is invalid;
 - the provider-resolved workflow completion time exceeds the freshness window;
 - repository ID is not allowlisted for the installation;
-- conclusion is not actionable;
+- conclusion is not `failure`;
 - the event maps to zero, multiple, closed, or stale PRs;
 - the source CI event began while the pull request was a draft;
 - the live pull request is a draft when the run is claimed;
-- the event head SHA does not match the provider-resolved PR head;
-- required workflow/job/artifact fields are absent; or
-- the delivery or failure key is already terminal and up to date.
+- the workflow, source-event, and live PR head SHAs do not all match;
+- required workflow/job/artifact fields are absent.
+
+An exact duplicate delivery or attempt is acknowledged and linked to its
+existing record without side effects. A repeated key whose immutable identity
+or payload hash differs is rejected and alerted as a correlation collision.
+
+The source-event and live-state checks occur after the attempt claim but before
+JUnit replay, Devin, Checks, comments, or write-capable credentials. Live PR
+state and head SHA are refreshed again before canonical failure attachment,
+investigator creation, authorization, remediator creation, verification, and
+publishing. A PR converted to draft after investigation begins cannot progress
+to remediation or publication of a repair.
 
 ### Idempotency keys
 
 ```text
 delivery_key = github:{repository_id}:{delivery_id}
+attempt_key  = github:{repository_id}:workflow_run:{workflow_run_id}
 failure_key  = github:{repository_id}:pr:{number}:sha:{head_sha}:job:{job_logical_key}:fp:{fingerprint}
 ```
 
-The delivery key absorbs provider retries. The failure key absorbs equivalent
-events, workflow reruns, restarts, and repeated processing. `job_logical_key`
-is the stable workflow/job/matrix identity, not the provider's per-run job ID.
-A new head SHA creates a new failure key because evidence and repair target
-changed.
+The delivery key absorbs provider retries. The attempt key identifies one
+provider workflow execution. Both exist at intake. The failure key absorbs
+equivalent workflow reruns, restarts, and repeated processing, but it cannot be
+computed until evidence supplies the stable workflow/job/matrix identity and
+normalized fingerprint. A new head SHA creates a new failure key because
+evidence and repair target changed.
+
+A reused delivery or attempt key with a different payload hash or immutable
+identity is rejected and alerted as a provider-correlation collision.
 
 ### Atomic claim pseudocode
 
 ```text
+-- Transaction 1: intake, before artifact collection.
 BEGIN;
-INSERT INTO deliveries(delivery_key, received_at) VALUES (?, ?)
+INSERT INTO workflow_attempts(
+    attempt_key,
+    identity_hash,
+    state,
+    head_sha,
+    policy_version
+  )
+  VALUES (?, ?, 'received', ?, ?)
+  ON CONFLICT DO NOTHING
+  RETURNING attempt_id;
+
+SELECT attempt_id, identity_hash
+  FROM workflow_attempts
+  WHERE attempt_key = ?
+  FOR UPDATE;
+
+IF existing attempt identity_hash differs:
+  ROLLBACK;
+  reject and alert correlation collision;
+
+IF attempt inserted:
+  INSERT INTO state_transitions(
+      aggregate_kind,
+      aggregate_id,
+      from_state,
+      to_state,
+      reason,
+      occurred_at
+    )
+    VALUES ('attempt', attempt_id, NULL, 'received', NULL, ?);
+
+delivery_disposition =
+  'accepted' if attempt inserted else 'duplicate_attempt';
+INSERT INTO deliveries(
+    delivery_key,
+    attempt_id,
+    received_at,
+    payload_hash,
+    disposition
+  )
+  VALUES (?, ?, ?, ?, delivery_disposition)
   ON CONFLICT DO NOTHING;
 
 IF delivery existed:
+  SELECT attempt_id, payload_hash
+    FROM deliveries
+    WHERE delivery_key = ?
+    FOR UPDATE;
+  IF attempt_id or payload_hash differs:
+    ROLLBACK;
+    reject and alert correlation collision;
   COMMIT;
-  return existing run/check by delivery_key;
+  return existing attempt and optional canonical run;
 
-INSERT INTO repair_runs(failure_key, state, head_sha, policy_version)
-  VALUES (?, 'received', ?, ?)
+COMMIT;
+return accepted attempt_id; run_id is not known yet;
+
+-- Outside a transaction: collect, hash, and normalize bounded evidence.
+failure_identity = derive_failure_identity(evidence);
+
+-- Transaction 2: attach evidence to one canonical logical failure.
+BEGIN;
+INSERT INTO rescue_runs(
+    failure_key,
+    failure_identity_hash,
+    state,
+    head_sha,
+    policy_version
+  )
+  VALUES (?, ?, 'evidence_ready', ?, ?)
   ON CONFLICT DO NOTHING
   RETURNING run_id;
 
 IF no run_id returned:
-  SELECT run_id, state FROM repair_runs WHERE failure_key = ? FOR UPDATE;
-  UPDATE deliveries SET run_id = existing.run_id WHERE delivery_key = ?;
+  SELECT run_id, state, failure_identity_hash
+    FROM rescue_runs
+    WHERE failure_key = ?
+    FOR UPDATE;
+  IF failure_identity_hash differs:
+    ROLLBACK;
+    reject and alert failure-key collision;
+  UPDATE workflow_attempts
+    SET run_id = existing.run_id,
+        state = 'completed',
+        terminal_disposition = 'attached_to_existing_failure'
+    WHERE attempt_id = ?;
+  INSERT INTO state_transitions(...)
+    VALUES (
+      'attempt',
+      attempt_id,
+      'failure_identity_ready',
+      'completed',
+      'duplicate_failure',
+      ?
+    );
   COMMIT;
-  return existing run/check by failure_key;
+  return existing canonical run without side effects;
 
-INSERT INTO run_transitions(run_id, from_state, to_state, reason, occurred_at)
-  VALUES (?, NULL, 'received', NULL, ?);
-UPDATE deliveries SET run_id = new.run_id WHERE delivery_key = ?;
+INSERT INTO state_transitions(
+    aggregate_kind,
+    aggregate_id,
+    from_state,
+    to_state,
+    reason,
+    occurred_at
+  )
+  VALUES ('run', ?, NULL, 'evidence_ready', NULL, ?);
+UPDATE workflow_attempts
+  SET run_id = new.run_id,
+      state = 'completed',
+      terminal_disposition = 'accepted'
+  WHERE attempt_id = ?;
+INSERT INTO state_transitions(...)
+  VALUES (
+    'attempt',
+    attempt_id,
+    'failure_identity_ready',
+    'completed',
+    NULL,
+    ?
+  );
 COMMIT;
 ```
 
-The next worker moves `received -> validated` with compare-and-set on expected
-state and version. Late workers cannot append duplicate transitions or
-overwrite a newer terminal state.
+Only the owner of the canonical run advances to replay or external side
+effects. Late workers cannot append duplicate transitions or overwrite a newer
+terminal state.
 
 ## 5. Durable data model
 
@@ -216,62 +353,86 @@ overwrite a newer terminal state.
 
 | Table | Purpose | Key fields |
 |---|---|---|
-| `deliveries` | Provider delivery dedupe and replay audit. | `delivery_key`, `provider`, `event_name`, `received_at`, `payload_hash`, `run_id`. |
-| `repair_runs` | One logical CI rescue attempt per failure key. | `run_id`, `failure_key`, `state`, `terminal_reason`, `repository_id`, `pr_number`, `head_sha`, `workflow_run_id`, `job_logical_key`, `fingerprint`, `policy_version`, milestone timestamps, `created_at`, `updated_at`. |
-| `run_transitions` | Append-only audit timeline. | `run_id`, `sequence`, `from_state`, `to_state`, `reason`, `actor`, `occurred_at`, `duration_ms`, `metadata_json`. |
-| `evidence_artifacts` | Bounded, hashed evidence references. | `artifact_id`, `run_id`, `kind`, `source_url`, `sha256`, `redacted_ref`, `normalized_ref`, `bytes`, `expires_at`. |
+| `deliveries` | Provider delivery dedupe and replay audit. | `delivery_key`, `provider`, `event_name`, `received_at`, `payload_hash`, `disposition`, `attempt_id`. |
+| `workflow_attempts` | One provider workflow execution before/after canonical-failure attachment. | `attempt_id`, `attempt_key`, `identity_hash`, `state`, `terminal_disposition`, `repository_id`, `workflow_run_id`, `pr_number`, `head_sha`, `run_id`, `created_at`, `updated_at`. |
+| `rescue_runs` | One canonical CI rescue per failure key. | `run_id`, `failure_key`, `failure_identity_hash`, `state`, `terminal_reason`, `repository_id`, `pr_number`, `head_sha`, `job_logical_key`, `fingerprint`, `policy_version`, milestone timestamps, `created_at`, `updated_at`. |
+| `state_transitions` | Append-only attempt/run audit timeline. | `aggregate_kind`, `aggregate_id`, `sequence`, `from_state`, `to_state`, `reason`, `actor`, `occurred_at`, `duration_ms`, `metadata_json`. |
+| `evidence_artifacts` | Bounded, hashed evidence references. | `artifact_id`, `attempt_id`, nullable `run_id`, `kind`, `source_url`, `sha256`, `redacted_ref`, `normalized_ref`, `bytes`, `expires_at`. |
 | `replay_attempts` | Deterministic command outcomes. | `attempt_id`, `run_id`, `role`, `checkout_sha`, `argv_json`, `exit_code`, `duration_ms`, `stdout_ref`, `stderr_ref`, `collection_hash`. |
 | `devin_sessions` | Session correlation and recovery. | `devin_session_id`, `run_id`, `role`, `request_hash`, `status`, `started_at`, `deadline_at`, `completed_at`, `structured_output_ref`, `usage_json`. |
+| `external_effects` | Durable intent and reconciliation for remote side effects. | `effect_id`, `run_id`, `kind`, `correlation_key`, `request_hash`, `state`, `provider_id`, `attempt_count`, `last_error`, timestamps. |
 | `authorizations` | Explicit write authorization. | `authorization_id`, `run_id`, `failure_key`, `head_sha`, `actor`, `method`, `scope`, `created_at`, `expires_at`. |
 | `patches` | Derived, policy-checked repair artifacts. | `patch_id`, `run_id`, `source_session_id`, `diff_sha256`, `changed_paths_json`, `policy_result`, `bot_branch`, `pr_url`. |
-| `check_outputs` | Stable publisher upsert state. | `run_id`, `check_run_id`, `external_key`, `status`, `conclusion`, `last_payload_hash`, `updated_at`. |
+| `check_outputs` | Stable publisher upsert state. | `run_id`, `check_run_id`, `external_id`, `status`, `conclusion`, `last_payload_hash`, `updated_at`. |
 
 ### State machine
 
+Workflow attempts have a separate lifecycle because a canonical failure does
+not exist until evidence is normalized:
+
 ```text
 received
-  -> validated
-  -> authorized_read
+  -> source_event_collecting
+  -> eligibility_checking
   -> evidence_collecting
-  -> replaying_failure
-  -> investigation_session_running
-  -> diagnosis_ready
-  -> diagnosis_published
-  -> awaiting_repair_authorization
-       -> diagnosis_only
-       -> authorization_expired
-       -> repair_authorized
-       -> remediation_session_running
-       -> patch_proposed
-       -> policy_checking
-       -> verifying
-       -> publishing_repair
-       -> succeeded
+  -> failure_identity_ready
+  -> completed
 ```
 
-Terminal states:
+`completed` carries a terminal disposition such as `accepted`,
+`attached_to_existing_failure`, `suppressed_draft_origin`,
+`suppressed_current_draft`, `stale_delivery`, or `rejected`. Attempt state is
+never used as disposition. Duplicate deliveries point to the existing attempt
+and do not transition the canonical run.
 
-| State | Meaning |
-|---|---|
-| `succeeded` | Authorized repair was policy-accepted, verified, and published. |
-| `diagnosis_only` | Read-only diagnosis completed and no repair was requested because policy, fork trust, or maintainer choice stopped there. |
-| `authorization_expired` | Diagnosis stayed available but the repair authorization window closed. |
-| `duplicate` | Existing delivery or failure key owns the work. |
-| `not_actionable` | Event is valid but outside scope. |
-| `validation_failed` | Event/auth/schema failed. |
-| `authorization_failed` | Actor, repo, branch, fork, or scope cannot satisfy the required read or write authorization. |
-| `insufficient_replay_evidence` | No exact deterministic command can be selected. |
-| `replay_failed_infra` | Sandbox cannot execute for environment reasons. |
-| `unresolved` | Evidence cannot support a confident classification. |
-| `devin_api_failed` | Session create/poll/message/terminate failed beyond retry budget. |
-| `interaction_required` | Session requested user input or approval that unattended automation cannot provide. |
-| `timed_out` | Wall-clock or ACU budget exhausted. |
-| `malformed_output` | Devin output fails schema or cross-check validation. |
-| `stale_target` | PR head changed before repair, verification, or publish. |
-| `policy_rejected` | Patch violates path, credential, symlink, workflow, or scope rules. |
-| `verification_failed` | Clean-room acceptance command or invariant probe failed. |
-| `publish_failed` | Check, branch, or companion PR publication failed. |
-| `cancelled` | Human or policy kill switch stopped the run. |
+Canonical rescue runs use:
+
+```text
+evidence_ready
+  -> replaying_failure
+  -> failure_reproduced
+  -> investigation_session_pending
+  -> investigation_session_running
+  -> diagnosis_ready
+  -> publishing_diagnosis
+  -> diagnosis_published
+       -> completed (diagnosis_only)
+       -> awaiting_repair_authorization
+            -> completed (diagnosis_only or authorization_expired)
+            -> repair_authorized
+            -> remediation_session_pending
+            -> remediation_session_running
+            -> patch_proposed
+            -> policy_checking
+            -> verifying
+            -> publishing_repair
+            -> completed (repair_published)
+```
+
+Terminal state is one of `completed`, `failed`, or `cancelled`;
+`terminal_reason` is null until that transition. Attempt suppression is kept
+on `workflow_attempts` rather than represented as a run failure.
+
+| Terminal reason | Terminal state | Meaning |
+|---|---|---|
+| `repair_published` | `completed` | Authorized repair was policy-accepted, verified, and published. |
+| `diagnosis_only` | `completed` | Read-only diagnosis completed and policy, fork trust, expiry, or maintainer choice stopped there. |
+| `not_actionable` | `completed` | Evidence is valid but no repair or diagnosis action is useful. |
+| `validation_failed` | `failed` | Event or schema failed after attempt attachment. |
+| `authorization_failed` | `failed` | Actor, repo, branch, fork, or scope cannot satisfy the required authorization. |
+| `authorization_expired` | `completed` | Diagnosis remains available and no repair was started before expiry. |
+| `insufficient_replay_evidence` | `failed` | No exact deterministic command can be selected. |
+| `replay_failed_infra` | `failed` | Sandbox cannot execute for environment reasons. |
+| `unresolved` | `completed` | Evidence cannot support a confident classification. |
+| `devin_api_failed` | `failed` | Session create/poll/message/terminate failed beyond retry budget. |
+| `interaction_required` | `failed` | Session requested input or approval that unattended automation cannot provide. |
+| `timed_out` | `failed` | Wall-clock or ACU budget exhausted. |
+| `malformed_output` | `failed` | Devin output fails schema or cross-check validation. |
+| `stale_target` | `cancelled` | PR head changed before repair, verification, or publish. |
+| `policy_rejected` | `failed` | Patch violates path, credential, symlink, workflow, or scope rules. |
+| `verification_failed` | `failed` | Clean-room acceptance command or invariant probe failed. |
+| `publish_failed` | `failed` | Check, branch, or companion PR publication failed. |
+| `cancelled` | `cancelled` | Human or policy kill switch stopped the run. |
 
 Progress is represented by current state plus completed evidence items,
 elapsed time, and deadline. The system never reports a model completion
@@ -296,6 +457,15 @@ Normalize timestamps, worker IDs, temp directories, random ports, and absolute
 checkout paths before fingerprinting. Keep original artifacts hashed and
 referenced, but send only bounded, redacted excerpts to Devin.
 
+GitHub artifacts are untrusted ZIP archives. Download only artifacts associated
+with the accepted workflow-run ID into a fresh quarantine directory. Before
+extraction, cap compressed size, entry count, entry size, expanded size,
+nesting, and compression ratio; reject absolute paths, `..`, NULs, duplicate
+normalized paths, symlinks, hard links, devices, and non-regular entries.
+Extract through a controller-owned streaming ZIP reader, never an archive shell
+command. Parse JUnit with external entities disabled and canonically sort
+candidate failures before selecting one for fingerprinting.
+
 ### Replay command selection
 
 The controller uses deterministic adapters before invoking Devin:
@@ -316,6 +486,19 @@ canonical paths under `tests/`, rejects metacharacters, resolves the path inside
 the checkout, confirms the target with `pytest --collect-only -q`, and stores
 the final command as an argv array.
 
+The replay and verification image is digest-pinned and materializes dependency
+layers from the trusted default branch or a controller-approved lock digest.
+Network is disabled before any pull-request-controlled build backend, install
+script, import, test collection, or hook can run. If the pull request package
+must be installed, installation runs without network in the disposable
+sandbox. Dependency caches are immutable and the sandbox cannot reach cloud
+metadata or internal services.
+
+If offline installation cannot satisfy an adapter, a separate uncredentialed
+builder may use only allowlisted package sources and no internal network. It
+exports a hashed dependency artifact into the offline sandbox and never
+receives controller, repository, or cloud credentials.
+
 ## 7. Devin API session protocol
 
 ### Investigator session
@@ -335,7 +518,7 @@ below is the target adapter contract:
   "prompt": "<bounded prompt with evidence refs and acceptance taxonomy>",
   "knowledge_ids": ["<repo-skill-or-knowledge-id-if-configured>"],
   "max_acu_limit": 3,
-  "repos": ["ong6/superset"],
+  "repos": ["<isolated-owner>/<source-mirror>"],
   "resumable": false,
   "secret_ids": [],
   "structured_output_required": true,
@@ -375,7 +558,10 @@ below is the target adapter contract:
     "role:investigator",
     "repo:ong6/superset",
     "workflow:python-unit",
-    "schema:ci-rescue-investigator-v1"
+    "schema:ci-rescue-investigator-v1",
+    "run:<run-id>",
+    "request:<request-hash>",
+    "head:<head-sha>"
   ]
 }
 ```
@@ -383,6 +569,13 @@ below is the target adapter contract:
 The controller enforces its own failure-key idempotency and wall-clock budget.
 It records API-reported ACU and any unavailable usage or cost data as
 `unknown`.
+
+The target GitHub repository is not installed for the investigator identity.
+The standard Devin GitHub integration includes repository write capabilities,
+so the pilot provides a disposable source mirror or snapshot at the pinned SHA
+with no upstream credentials. A deployment may use direct target access only
+when a startup permission probe proves the effective integration is read-only
+for contents, Checks, pull requests, Actions, workflows, and administration.
 
 ### Investigator prompt contract
 
@@ -416,7 +609,7 @@ publisher credential.
   "title": "CI Rescue repair: ong6/superset#42",
   "prompt": "<bounded repair prompt>",
   "max_acu_limit": 4,
-  "repos": ["ong6/superset"],
+  "repos": ["<isolated-owner>/<source-mirror>"],
   "resumable": false,
   "secret_ids": [],
   "structured_output_required": true,
@@ -467,9 +660,27 @@ publisher credential.
 
 The controller persists the inline patch, checks its hash, applies it in a
 fresh checkout, derives changed paths from Git, and rejects any mismatch
-between the authorized SHA, claimed paths, and observed diff. A dedicated
-read-only Devin service identity must be used; prompt instructions are not a
-write-permission boundary.
+between the authorized SHA, claimed paths, and observed diff. The remediator
+uses the isolated source boundary, `secret_ids: []`, and no publisher
+credential; prompt instructions are not a write-permission boundary.
+
+### Session-create idempotency and reconciliation
+
+The v3 create endpoint does not expose a caller-supplied idempotency key. Before
+`POST`, the controller commits an `external_effects` intent with the request
+hash, role, run ID, aggregate budget, and deterministic session tags. The run
+enters `investigation_session_pending` or `remediation_session_pending`.
+
+If the create response is lost or times out, the adapter lists sessions using
+the exact tags, creation window, service user, and source repository:
+
+- one match is adopted and persisted;
+- no match permits one bounded retry with the same intent and budget; and
+- multiple matches fail closed, terminate extras when possible, and alert.
+
+After that retry, zero remaining matches fail closed. A poll timeout never
+causes another create request. Recorded HTTP fixtures must cover
+remote-success/local-timeout and ambiguous-reconciliation cases.
 
 ### Session status handling
 
@@ -506,12 +717,23 @@ Accepted authorization methods:
   current head SHA.
 
 Authorization expires, is scoped to one failure key, and is invalidated by a
-head-SHA change. It never authorizes a fork write, merge, approval, workflow
-edit, secret access, or a second unrelated repair.
+head-SHA change, PR closure, draft conversion, or expiry. It never authorizes a
+fork write, merge, approval, workflow edit, secret access, or a second
+unrelated repair.
 
-The controller resolves the actor's effective repository permission through
-the trusted GitHub API. Webhook `author_association`, labels, and comment text
-are untrusted evidence and cannot independently authorize a repair.
+The authorization event is normalized separately from the failed-workflow
+event and records its own delivery ID, event/action, run ID, PR, authorized head
+SHA, actor, method, request time, and expiry. The failed workflow's actor is
+audit metadata and cannot authorize another principal's request.
+
+The controller resolves the authorizing actor's effective repository
+permission through the trusted GitHub API. GitHub App permission lookup
+uses the repository collaborator-permission endpoint, whose current contract
+requires repository `metadata: read`. Webhook `author_association`, labels,
+workflow actors, and comment text are untrusted evidence and cannot
+independently authorize a repair. A deployment probe verifies the provider's
+advertised accepted permissions and fails closed rather than granting broader
+organization access by default.
 
 ### Patch policy for the first product slice
 
@@ -533,7 +755,8 @@ Reject:
 
 ### GitHub Check output
 
-Use one stable Check per failure key.
+Use one stable Check per failure key. Set a deterministic, versioned
+`external_id` derived from that key.
 
 ```markdown
 ## CI Rescue diagnosis
@@ -561,6 +784,19 @@ Uncertainty:
 After repair verification, update the same Check with patch hash, bot branch or
 companion PR URL, verification command, elapsed times, session IDs, sandbox
 minutes, and API-reported ACU/cost or `unknown`.
+
+Before creating a Check, bot branch, or repair PR, persist an external-effect
+intent. If a response is unknown:
+
+- reconcile Checks by pinned SHA plus exact `external_id`;
+- reconcile the bot branch by exact repository and
+  `devin/ci-rescue/<run_id>` ref; and
+- reconcile repair PRs by exact repository, head branch, base branch, and run
+  marker.
+
+One match is adopted and zero matches permit one bounded retry. After that
+retry, zero or multiple matches fail closed. Display names and free-form search
+are not identity.
 
 ## 9. Independent verification and false-green prevention
 
@@ -610,10 +846,10 @@ from test-only edits in the first slice.
 
 ## 10. Deterministic test case design for the next product PR
 
-PR #1 remains documentation-only. The product PR should add the explicit unit
-test below and keep the existing parameterized invalid-config coverage intact
-or remove only the equivalent anonymous equality case if maintainers prefer
-one source of coverage.
+This design PR remains documentation-only. The product PR should add the
+explicit unit test below and keep the existing parameterized invalid-config
+coverage intact, or remove only the equivalent anonymous equality case if
+maintainers prefer one source of coverage.
 
 ```python
 def test_report_execution_config_rejects_reserves_equal_to_budget() -> None:
@@ -686,8 +922,9 @@ The next PR should include replayable, credential-free JSON fixtures:
 
 | Fixture | Contents |
 |---|---|
-| `normalized_failed_event.json` | Repository ID, delivery ID, workflow run, PR, immutable SHA, job, conclusion, same-repo trust, artifact IDs. |
-| `evidence_bundle.json` | Redacted log/JUnit refs, artifact SHA-256 hashes, exact pytest node, changed paths, fingerprint. |
+| `normalized_workflow_attempt.json` | Repository ID, delivery ID, workflow run, PR candidate, immutable SHA, conclusion, and artifact IDs. |
+| `event_file_ready_for_review.json` | Uploaded source event with PR action, draft-at-source state, and source head SHA. |
+| `evidence_bundle.json` | Redacted log/JUnit refs, artifact SHA-256 hashes, exact pytest node, changed paths, and fingerprint. |
 | `investigator_output_change_caused.json` | Valid structured output linking `>` to the equality-boundary invariant. |
 | `run_timeline_verified.json` | Full state transitions, session IDs, authorization, patch hash, verification result, timings, duplicate handling, and metrics. |
 | `malformed_output.json` | Invalid or unsupported output used to prove fail-closed behavior. |
@@ -822,12 +1059,12 @@ Useful pilot questions:
 
 ```sql
 -- Active tasks by state.
-SELECT state, count(*) FROM repair_runs
+SELECT state, count(*) FROM rescue_runs
 WHERE terminal_reason IS NULL
 GROUP BY state;
 
 -- Completed outcomes for the last seven days.
-SELECT terminal_reason, count(*) FROM repair_runs
+SELECT terminal_reason, count(*) FROM rescue_runs
 WHERE updated_at >= now() - interval '7 days'
 GROUP BY terminal_reason
 ORDER BY count(*) DESC;
@@ -846,8 +1083,10 @@ SELECT
   count(*) FILTER (WHERE diagnosis_published_at IS NOT NULL) AS diagnoses,
   count(*) FILTER (WHERE repair_offered_at IS NOT NULL) AS repair_offers,
   count(*) FILTER (WHERE repair_authorized_at IS NOT NULL) AS authorizations,
-  count(*) FILTER (WHERE terminal_reason = 'succeeded') AS verified_repairs
-FROM repair_runs
+  count(*) FILTER (
+    WHERE terminal_reason = 'repair_published'
+  ) AS verified_repairs
+FROM rescue_runs
 WHERE created_at >= now() - interval '30 days';
 ```
 
@@ -861,12 +1100,14 @@ WHERE created_at >= now() - interval '30 days';
 | Replay attack | Delivery key and payload hash retention. |
 | Payload repository spoofing | Resolve repository and PR via trusted provider API by immutable IDs. |
 | Prompt injection through logs or code | Treat logs/artifacts/code as quoted evidence; prompts forbid following embedded instructions. |
+| Malicious artifact archive | Quarantine download; bounded streaming extraction; reject traversal, links, devices, duplicate paths, and expansion abuse. |
 | Secret exfiltration from fork | Forks are read-only; no publisher token in sandbox or Devin. |
+| PR-controlled dependency hook uses network | Build trusted dependency layer first; disable network before PR-controlled install/build/import/test code. |
 | Model chooses unsafe command | Controller owns command mapping; model commands are advisory only. |
 | Test-weakening false green | Path policy forbids test edits in pilot; collect-only and invariant probe detect weakening. |
 | Symlink/submodule/path traversal | Canonical path normalization and Git-derived changed paths. |
 | Stale branch write | Re-resolve head SHA before remediation, verification, and publish. |
-| Duplicate bot spam | Stable Check upsert and unique failure key. |
+| Duplicate bot spam after a lost response | Durable effect intent, deterministic provider correlation, and reconciliation before retry. |
 | Cost runaway | Wall-clock deadlines, ACU limits when available, retry caps, queue limits. |
 | Late worker overwrite | Compare-and-set transitions and monotonic publisher updates. |
 | Artifact retention loss | Store hashes and bounded redacted copies needed for audit. |
@@ -884,33 +1125,50 @@ Start with:
 Add for authorized repair only:
 
 - `contents: write` to a bot branch namespace; and
-- `pull_requests: write` if opening a companion repair PR.
+- `pull_requests: write` if opening a companion repair PR;
+- `issues: read` for comment authorization.
+
+The App registration may hold this union, but the controller mints
+per-operation installation tokens with narrower permissions. Intake,
+source-event parsing, and evidence collection receive read-only tokens; Check
+write is minted only after eligibility; content/PR write is minted only after
+repair authorization and the final live-state/SHA check.
 
 Do not request `workflows: write`, `administration`, `secrets`, direct merge,
 or broad organization privileges for the pilot.
 
 ## 13. Test matrix for the product PR
 
+Every R1-R10 case in `takehome/07-ready-for-review-ci-cases.md` is a required
+executable fixture. The table below adds controller, security, and
+lost-response coverage rather than replacing that review-readiness matrix.
+
 | Layer | Test | Expected result |
 |---|---|---|
 | Unit | Signature, delivery ID, event age, content type, payload schema. | Invalid inputs reject before side effects. |
 | Unit | Delivery and failure-key construction. | Stable keys; SHA changes create new failure key. |
+| Unit | Two-stage attempt/failure claim. | Intake does not require an evidence fingerprint; equivalent reruns attach to one run. |
 | Unit | Source-event and live-state review-ready gate. | Draft-origin or currently-draft runs make zero Devin API calls. |
 | Unit | Pytest node extraction from JUnit/log. | Exact command selected or evidence gap terminal. |
+| Unit | Artifact archive validation. | Traversal, links, duplicate paths, zip bombs, and oversized XML reject before extraction. |
 | Unit | Structured-output schema validation. | Unknown enum, missing evidence, extra fields, or path mismatch fail closed. |
 | Unit | Path policy canonicalization. | Test/workflow/symlink/submodule/traversal edits rejected. |
 | Contract | Fake Devin API create/poll/status/output. | Correct request body, tags, budget, polling, terminal mapping. |
-| Contract | GitHub Check upsert. | Same failure key updates one Check. |
+| Contract | Devin create response lost. | Matching tagged session is adopted; multiple matches fail closed. |
+| Contract | GitHub Check upsert and lost response. | Same external ID updates or adopts one Check. |
+| Contract | Repair PR lost response. | Exact head/base PR is adopted rather than duplicated. |
 | Integration | Saved failed-event happy path. | One investigator session, one diagnosis Check, no repair before authorization. |
 | Integration | Draft failure followed by `ready_for_review`. | Draft run stays suppressed; one fresh failed run creates one investigator. |
 | Integration | Eligible failure re-drafted before claim. | `suppressed_current_draft`, no session or GitHub output. |
 | Integration | Authorized same-repo repair. | One remediator session, policy pass, exact node red-to-green, bot output. |
 | Integration | Duplicate concurrent deliveries. | One run, one session per role, one Check. |
+| Integration | Equivalent workflow reruns. | Multiple attempts attach to one failure run and create one session. |
 | Integration | Controller restart after session creation. | Resume persisted session, no second POST. |
 | Failure injection | Devin timeout/API error/suspended without follow-up. | Terminal non-success with Check update. |
 | Failure injection | Malformed Devin output. | `malformed_output`, no authorization progression. |
 | Failure injection | Head SHA changes before publish. | `stale_target`, no write. |
 | Security | Fork PR requests repair. | Diagnosis-only; no write token exposed. |
+| Security | Workflow actor differs from authorization actor. | Only the comment/label actor's live permission can authorize repair. |
 | Security | Patch edits only the test. | `policy_rejected`, no verification/publish. |
 | Observability | Every fixture emits metrics/logs/transitions. | Active/completed status, taxonomy, latency, and cost fields queryable. |
 
@@ -962,13 +1220,10 @@ If safety or quality gates fail:
 
 | Milestone | Deliverable | Exit gate |
 |---|---|---|
-| M1. Docs and spec | This design, skills, test-case plan, and observability plan. | PR #1 remains documentation-only. |
-| M2. Controller skeleton | FastAPI webhook, schema validation, run store, transitions, saved-event replay. | Invalid/duplicate/stale fixtures pass. |
-| M3. Evidence and replay | Python unit adapter, sandbox checkout, exact pytest replay, artifact hashing. | Seeded `>=` to `>` regression reproduces. |
-| M4. Devin investigator | Create/poll/validate read-only session, publish diagnosis Check. | Malformed/timeout/API fixtures fail closed. |
-| M5. Authorization and remediator | Scoped maintainer authorization, trusted-branch repair session. | Fork/stale/unauthorized cases blocked. |
-| M6. Verification and publish | Patch policy, fresh checkout verification, bot branch/PR output. | Exact node fails before and passes after; test-edit false green rejected. |
-| M7. Observability and pilot | Metrics, dashboard, alerts, cost/adoption report. | VP scorecard answers safety, usefulness, latency, throughput, and economics. |
+| M1. Deterministic controller | Standalone package, schemas, durable claims/transitions, fixture evidence and sandbox, fake Devin/GitHub adapters, replay/show-run CLI. | Credential-free fixture suite reaches `completed (diagnosis_only)`; duplicate, stale, malformed, timeout, restart, and R1-R10 cases pass without duplicate effects. |
+| M2. Live read-only diagnosis | FastAPI intake, GitHub resolution/artifacts, isolated replay, read-only investigator, reconciled diagnosis Check. | One trusted test PR produces one Check; forks and unknown responses remain bounded and fail closed without privileged source access. |
+| M3. Controlled repair | Scoped authorization, remediator, patch policy, fresh verification, deterministic bot branch/companion PR, kill switch. | Exact node fails before and passes after; test-edit false green, fork, draft, stale, expired, and unauthorized cases cannot publish. |
+| M4. Pilot evaluation | Metrics, dashboard, alerts, cost/adoption report, and incident/rollback drills. | VP scorecard answers safety, usefulness, latency, throughput, and economics before adapter expansion. |
 
 ## 16. VP Engineering review questions
 

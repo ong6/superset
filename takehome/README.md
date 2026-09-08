@@ -31,7 +31,7 @@ automation built around the Devin API and this Superset fork.
 5. [Focused comparison of the three candidate automations](05-three-idea-evaluation.md)
 6. [Failing Check Repair technical specification](06-failing-check-repair-technical-spec.md)
 7. [Ready-for-review CI rescue test cases](07-ready-for-review-ci-cases.md)
-8. [PR CI Rescue product implementation design](07-product-implementation-design.md)
+8. [PR CI Rescue product implementation design](08-product-implementation-design.md)
 9. [Detailed recommendation and implementation design](04-recommendation.md)
 
 ## Recommended direction
