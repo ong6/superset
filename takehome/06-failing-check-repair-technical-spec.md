@@ -259,11 +259,12 @@ Terminal states:
 | `duplicate` | Existing delivery or failure key owns the work. |
 | `not_actionable` | Event is valid but outside scope. |
 | `validation_failed` | Event/auth/schema failed. |
-| `authorization_failed` | Actor, repo, branch, fork, or scope cannot write. |
+| `authorization_failed` | Actor, repo, branch, fork, or scope cannot satisfy the required read or write authorization. |
 | `insufficient_replay_evidence` | No exact deterministic command can be selected. |
 | `replay_failed_infra` | Sandbox cannot execute for environment reasons. |
 | `unresolved` | Evidence cannot support a confident classification. |
 | `devin_api_failed` | Session create/poll/message/terminate failed beyond retry budget. |
+| `interaction_required` | Session requested user input or approval that unattended automation cannot provide. |
 | `timed_out` | Wall-clock or ACU budget exhausted. |
 | `malformed_output` | Devin output fails schema or cross-check validation. |
 | `stale_target` | PR head changed before repair, verification, or publish. |
@@ -472,19 +473,27 @@ write-permission boundary.
 
 ### Session status handling
 
+Session IDs are opaque strings; the adapter must not enforce a prefix beyond
+what the API accepts.
+
 | Status | Controller behavior |
 |---|---|
-| `new`, `claimed`, `running`, `resuming` | Continue polling until deadline with bounded backoff and jitter. |
+| `new`, `claimed`, `resuming` | Continue polling until deadline with bounded backoff and jitter. |
+| `running` with `working` or no detail | Continue polling until deadline. |
+| `running` with `waiting_for_user` or `waiting_for_approval` | Request termination and fail as `interaction_required`; unattended automation never answers or approves. |
+| `running` with `finished` | Poll for a short bounded grace period for `exit`; otherwise terminate and fail closed. |
 | `suspended` | If a supported follow-up is configured and one has not been used, send one evidence-rich message; otherwise mark non-success and terminate if policy requires. |
 | `exit` | Validate returned structured output; success is possible only after schema validation and controller cross-checks. |
 | `error` | Terminal `devin_api_failed` or role-specific failure. |
-| Unknown status | Terminal non-success unless a documented API update explicitly adds handling. |
+| Unknown status or detail | Terminal non-success unless a documented API update explicitly adds handling. |
 
 The session ID is persisted before polling. If the controller crashes after
 creation, a sweeper resumes polling the persisted session instead of creating
 another session. On stale SHA, cancellation, or timeout, use
 `DELETE /v3/organizations/{org_id}/sessions/{session_id}` for active sessions
-when applicable, and record whether termination succeeded.
+when applicable. A `200` response acknowledges the request but is not proof of
+a terminal state, so continue bounded polling and record whether termination
+completed.
 
 ## 8. Authorization, policy, and publishing
 
@@ -499,6 +508,10 @@ Accepted authorization methods:
 Authorization expires, is scoped to one failure key, and is invalidated by a
 head-SHA change. It never authorizes a fork write, merge, approval, workflow
 edit, secret access, or a second unrelated repair.
+
+The controller resolves the actor's effective repository permission through
+the trusted GitHub API. Webhook `author_association`, labels, and comment text
+are untrusted evidence and cannot independently authorize a repair.
 
 ### Patch policy for the first product slice
 

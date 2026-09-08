@@ -46,9 +46,9 @@ repair, policy validation, clean-room verification, and controlled publishing.
 This sequence preserves a useful review boundary:
 
 ```text
-PR 2: deterministic controller
-PR 3: live diagnosis
-PR 4: controlled repair
+Milestone 1: deterministic controller
+Milestone 2: live diagnosis
+Milestone 3: controlled repair
 ```
 
 ## 2. Why this shape
@@ -211,9 +211,9 @@ takehome/ci_rescue/
     └── integration/
 ```
 
-Only files required by the active milestone should be added. For example, PR 2
-should define the live port interfaces but implement only SQLite, filesystem,
-fixture-sandbox, fake-Devin, and fake-GitHub adapters.
+Only files required by the active milestone should be added. For example,
+Milestone 1 should define the live port interfaces but implement only SQLite,
+filesystem, fixture-sandbox, fake-Devin, and fake-GitHub adapters.
 
 ## 5. Dependency boundary
 
@@ -297,8 +297,10 @@ class TerminalReason(StrEnum):
     DUPLICATE = "duplicate"
     NOT_ACTIONABLE = "not_actionable"
     VALIDATION_FAILED = "validation_failed"
+    AUTHORIZATION_FAILED = "authorization_failed"
     INSUFFICIENT_REPLAY_EVIDENCE = "insufficient_replay_evidence"
     DEVIN_API_FAILED = "devin_api_failed"
+    INTERACTION_REQUIRED = "interaction_required"
     TIMED_OUT = "timed_out"
     MALFORMED_OUTPUT = "malformed_output"
     STALE_TARGET = "stale_target"
@@ -331,6 +333,11 @@ class GitHubGateway(Protocol):
     def download_evidence(self, run: ResolvedRun) -> EvidenceBundle: ...
     def upsert_check(self, output: CheckOutput) -> CheckReference: ...
     def resolve_head_sha(self, repository_id: int, pull_request: int) -> str: ...
+    def resolve_actor_permission(
+        self,
+        repository_id: int,
+        actor_login: str,
+    ) -> RepositoryPermission: ...
 
 
 class DevinGateway(Protocol):
@@ -352,9 +359,9 @@ without changing behavior.
 
 ## 8. Persisted state
 
-### Minimal PR 2 tables
+### Minimal Milestone 1 tables
 
-PR 2 needs five tables:
+Milestone 1 needs five tables:
 
 | Table | Purpose |
 |---|---|
@@ -395,11 +402,12 @@ Publisher retries use the stored external key and payload hash.
 
 ## 9. State machine by milestone
 
-### PR 2
+### Milestone 1
 
 ```text
 received
   -> validated
+  -> authorized_read
   -> evidence_ready
   -> replaying_failure
   -> failure_reproduced
@@ -413,17 +421,19 @@ Failure exits:
 
 ```text
 validation_failed
+authorization_failed
 duplicate
 insufficient_replay_evidence
 replay_failed_infra
 devin_api_failed
+interaction_required
 timed_out
 malformed_output
 publish_failed
 cancelled
 ```
 
-### PR 4 additions
+### Milestone 3 additions
 
 ```text
 diagnosis_published
@@ -567,16 +577,27 @@ and active termination uses:
 DELETE /v3/organizations/{org_id}/sessions/{session_id}
 ```
 
-The adapter normalizes wire statuses:
+Session IDs are opaque strings. The adapter must not require the documented
+`devin-` prefix because a valid create response may return another accepted
+wire representation.
+
+The adapter normalizes both `status` and `status_detail`:
 
 | Wire state | Domain behavior |
 |---|---|
-| `new`, `claimed`, `running`, `resuming` | Continue until the controller deadline. |
+| `new`, `claimed`, `resuming` | Continue until the controller deadline. |
+| `running` with `working` or no detail | Continue until the controller deadline. |
+| `running` with `waiting_for_user` or `waiting_for_approval` | Request termination and fail as `interaction_required`; unattended automation never answers or approves. |
+| `running` with `finished` | Poll for a short bounded grace period for `exit`; otherwise request termination and fail closed. |
 | `exit` with structured output | Validate schema and cross-check evidence. |
 | `exit` without structured output | `malformed_output`. |
 | `error` | `devin_api_failed`. |
 | `suspended` | Terminal non-success unless one configured follow-up is explicitly supported. |
-| Unknown value | Fail closed as `devin_api_failed`. |
+| Unknown status or detail | Fail closed as `devin_api_failed`. |
+
+A successful `DELETE` is only a termination acknowledgement. The controller
+continues bounded polling until a terminal state is observed and records a
+termination failure if the session remains active at the deadline.
 
 The controller's unique failure key remains the source of idempotency even
 when the API offers its own idempotency behavior.
@@ -653,7 +674,7 @@ specified and tested.
 
 ### Fixture sandbox
 
-PR 2 uses a deterministic adapter whose replay result is loaded from
+Milestone 1 uses a deterministic adapter whose replay result is loaded from
 `evidence_bundle.json`. It records the same fields as the live sandbox:
 
 - checkout SHA;
@@ -702,8 +723,13 @@ Pull requests: read
 ```
 
 Repair publishing adds `Contents: write` and `Pull requests: write` only to the
-controller installation. The controller writes only to a configured
-`devin/ci-rescue/<run_id>` bot-branch namespace and never merges.
+controller installation. Repair authorization also requires `Issues: read` for
+the `issue_comment` event. The controller resolves the actor's effective
+repository permission through the trusted provider API using `Metadata: read`;
+webhook `author_association` is evidence, not authorization.
+
+The controller writes only to a configured `devin/ci-rescue/<run_id>`
+bot-branch namespace and never merges.
 
 The Check publisher stores the provider Check Run ID. Retries update that ID;
 they do not search by display name or post a new comment.
@@ -748,6 +774,7 @@ mode requires no secrets and must reject live network adapters.
 | Duplicate sequential replay | Existing run returned; no new side effect. |
 | Duplicate concurrent replay | Unique constraints permit one owner. |
 | Invalid repository or workflow | Rejected before evidence or session calls. |
+| Read authorization denied | Rejected before evidence or session calls. |
 | Stale SHA | Provider-resolved SHA mismatch terminates before session creation. |
 | Missing pytest node | `insufficient_replay_evidence`. |
 | Replay infrastructure failure | No investigator session. |
@@ -784,7 +811,7 @@ the same observable behavior. Examples:
 
 ## 18. Pull-request sequence
 
-### PR 2 — deterministic controller
+### Milestone 1 — deterministic controller
 
 Deliver:
 
@@ -804,7 +831,7 @@ Exit gate:
 - invalid inputs create no session or publisher call; and
 - the timeline reaches `diagnosis_only` through one Check upsert.
 
-### PR 3 — live read-only diagnosis
+### Milestone 2 — live read-only diagnosis
 
 Deliver:
 
@@ -823,7 +850,7 @@ Exit gate:
 - restart and timeout tests remain green; and
 - duplicate webhook deliveries create no duplicate session or Check.
 
-### PR 4 — controlled repair
+### Milestone 3 — controlled repair
 
 Deliver:
 
