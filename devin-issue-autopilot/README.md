@@ -60,6 +60,29 @@ make report
 The default Compose service runs `watch`, polling every 30 seconds. Stop it with
 Ctrl-C. `once` exits non-zero unless the issue reaches `verified`.
 
+## GitHub Actions
+
+The `Devin issue remediation` workflow runs when an authorized repository
+maintainer applies `devin-fix`. It can also be dispatched manually for an issue
+that still has `devin-fix`.
+
+Configure the repository under **Settings > Secrets and variables > Actions**:
+
+| Kind | Name | Value |
+|---|---|---|
+| Secret | `DEVIN_API_KEY` | `cog_...` key for a Devin service user with `UseDevinSessions` |
+| Variable | `DEVIN_ORG_ID` | Devin organization ID used by the service user |
+
+GitHub access uses the workflow's short-lived `GITHUB_TOKEN`; no GitHub personal
+access token is required. The job grants `issues: write` so the controller can
+post its terminal comment and update labels, plus read-only repository, pull
+request, check-run access.
+
+The workflow accepts only `admin`, `maintain`, or `write` actors. It serializes
+jobs per issue and uses `devin-running` as a visible claim. If a runner is
+interrupted before cleanup, leave that label in place until the existing Devin
+session has been inspected or cancelled; removing it permits a recovery run.
+
 ## Simulation quickstart
 
 No environment variables or credentials are required:
@@ -143,6 +166,7 @@ configured repository and the issue number:
 | Restart safety | Claims `new → creating` atomically, persists `session_id` before polling, and never blindly recreates it |
 | Idempotent output | Stores the GitHub comment ID and posts once |
 | Label reconciliation | Removes trigger and conflicting terminal labels before applying the outcome |
+| Workflow claim | Serializes by issue and rejects an existing `devin-running` label |
 
 ## State
 
