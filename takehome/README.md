@@ -29,7 +29,8 @@ automation built around the Devin API and this Superset fork.
 3. [Superset codebase overview](03-codebase-overview.md)
 4. [Architecture map](architecture/README.md)
 5. [Focused comparison of the three candidate automations](05-three-idea-evaluation.md)
-6. [Detailed recommendation and implementation design](04-recommendation.md)
+6. [Failing Check Repair technical specification](06-failing-check-repair-technical-spec.md)
+7. [Detailed recommendation and implementation design](04-recommendation.md)
 
 ## Recommended direction
 
@@ -52,6 +53,11 @@ The focused comparison independently evaluates a **Rebase Conflict Resolver**,
 **Failing Check Repair Tool**, and **Release Cherry-Pick Tool**. It ranks failed
 check repair first, then shows how the other two can reuse the same event,
 session, policy, verification, publishing, and observability platform.
+
+The Failing Check Repair technical specification expands that decision into the
+controller architecture, Devin API contracts, deterministic report-budget test
+case, security gates, observability metrics, pilot scorecard, and follow-up
+implementation sequence for a VP Engineering technical review.
 
 ## Devin skills
 
