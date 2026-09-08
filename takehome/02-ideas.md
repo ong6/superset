@@ -86,6 +86,15 @@ begins with read-only permissions, provides value to contributors and
 maintainers, and creates a direct adoption metric: do engineers use and accept
 its output?
 
+The first product gate is intentionally narrower than "run on every red
+check." Devin starts only when both the source CI event and a live provider
+lookup show that the pull request is open, out of draft, and still at the
+failed run's head SHA. A draft failure never becomes eligible retroactively;
+`ready_for_review` starts fresh CI, and only that review-ready execution may
+start Devin. The
+[ready-for-review test matrix](07-ready-for-review-ci-cases.md) defines the
+required lifecycle and showcase cases.
+
 For the requested three candidates, the backup option is the **Rebase Conflict
 Resolver**. It addresses visible, high-volume pain and gives Devin a strong
 two-sided intent-reasoning task, but safe semantic proof and publication are
@@ -110,8 +119,10 @@ know whether the failure is caused by their change, a flake, infrastructure, or
 stale generated output.
 
 **Event trigger:** Completed failed `workflow_run` or check suite associated
-with an open pull request. A maintainer label or `/devin fix` command can
-authorize remediation after diagnosis.
+with an open, non-draft pull request at the same immutable head SHA. The source
+CI event must also show that the run began after the pull request was ready for
+review. A maintainer label or `/devin fix` command can authorize remediation
+after diagnosis.
 
 **Workflow:** Resolve the immutable head SHA and failed job, download logs and
 test artifacts, fingerprint the failure, and use workflow metadata plus changed

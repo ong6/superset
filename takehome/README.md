@@ -30,7 +30,8 @@ automation built around the Devin API and this Superset fork.
 4. [Architecture map](architecture/README.md)
 5. [Focused comparison of the three candidate automations](05-three-idea-evaluation.md)
 6. [Failing Check Repair technical specification](06-failing-check-repair-technical-spec.md)
-7. [Detailed recommendation and implementation design](04-recommendation.md)
+7. [Ready-for-review CI rescue test cases](07-ready-for-review-ci-cases.md)
+8. [Detailed recommendation and implementation design](04-recommendation.md)
 
 ## Recommended direction
 
@@ -58,6 +59,10 @@ The Failing Check Repair technical specification expands that decision into the
 controller architecture, Devin API contracts, deterministic report-budget test
 case, security gates, observability metrics, pilot scorecard, and follow-up
 implementation sequence for a VP Engineering technical review.
+
+The ready-for-review test cases make the product boundary executable: draft CI
+never starts Devin, a fresh failed run after `ready_for_review` does, and
+duplicate, stale, or re-drafted runs fail closed.
 
 ## Devin skills
 

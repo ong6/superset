@@ -119,9 +119,12 @@ GitHub failed check event
 
 The production entry point accepts GitHub `workflow_run.completed` payloads
 from `Python-Unit` only when the conclusion is failure-like and the event maps
-to exactly one open pull request. Later adapters can add `check_suite` or
-`check_run` inputs after they pass the same validation and proof gates. Local
-demos use a saved normalized event with the same internal fields.
+to exactly one open, non-draft pull request. The uploaded source
+`pull_request` event must also show `draft: false`; a draft-originated run never
+becomes eligible because the pull request was marked ready before webhook
+processing. Later adapters can add `check_suite` or `check_run` inputs after
+they pass the same validation and proof gates. Local demos use a saved
+normalized event with the same internal fields.
 
 ```json
 {
@@ -136,6 +139,9 @@ demos use a saved normalized event with the same internal fields.
   "workflow_name": "Python-Unit",
   "workflow_conclusion": "failure",
   "pull_request_number": 42,
+  "source_pull_request_action": "ready_for_review",
+  "source_pull_request_draft": false,
+  "live_pull_request_draft": false,
   "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "head_ref": "devin/report-budget-regression",
   "base_ref": "master",
@@ -152,6 +158,8 @@ Reject before any sandbox, Devin, or GitHub publishing side effect when:
 - repository ID is not allowlisted for the installation;
 - conclusion is not actionable;
 - the event maps to zero, multiple, closed, or stale PRs;
+- the source CI event began while the pull request was a draft;
+- the live pull request is a draft when the run is claimed;
 - the event head SHA does not match the provider-resolved PR head;
 - required workflow/job/artifact fields are absent; or
 - the delivery or failure key is already terminal and up to date.
@@ -850,12 +858,15 @@ or broad organization privileges for the pilot.
 |---|---|---|
 | Unit | Signature, timestamp, content type, payload schema. | Invalid inputs reject before side effects. |
 | Unit | Delivery and failure-key construction. | Stable keys; SHA changes create new failure key. |
+| Unit | Source-event and live-state review-ready gate. | Draft-origin or currently-draft runs make zero Devin API calls. |
 | Unit | Pytest node extraction from JUnit/log. | Exact command selected or evidence gap terminal. |
 | Unit | Structured-output schema validation. | Unknown enum, missing evidence, extra fields, or path mismatch fail closed. |
 | Unit | Path policy canonicalization. | Test/workflow/symlink/submodule/traversal edits rejected. |
 | Contract | Fake Devin API create/poll/status/output. | Correct request body, tags, budget, polling, terminal mapping. |
 | Contract | GitHub Check upsert. | Same failure key updates one Check. |
 | Integration | Saved failed-event happy path. | One investigator session, one diagnosis Check, no repair before authorization. |
+| Integration | Draft failure followed by `ready_for_review`. | Draft run stays suppressed; one fresh failed run creates one investigator. |
+| Integration | Eligible failure re-drafted before claim. | `suppressed_current_draft`, no session or GitHub output. |
 | Integration | Authorized same-repo repair. | One remediator session, policy pass, exact node red-to-green, bot output. |
 | Integration | Duplicate concurrent deliveries. | One run, one session per role, one Check. |
 | Integration | Controller restart after session creation. | Resume persisted session, no second POST. |
