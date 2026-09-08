@@ -20,6 +20,7 @@ import re
 from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
+from typing import TypeAlias
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -140,7 +141,7 @@ class FakePR(BaseModel):
     checks: list[tuple[str, str | None]] = [("completed", "success")]
 
 
-type FakePRs = Mapping[str, FakePR | dict[str, object]]
+FakePRs: TypeAlias = Mapping[str, FakePR | dict[str, object]]
 
 
 class DevinClient:
