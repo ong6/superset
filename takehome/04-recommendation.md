@@ -19,447 +19,432 @@ under the License.
 
 # Recommendation and Next Steps
 
-## Selected build: PR CI Rescue Autopilot
+## Selected build: GitHub Issue Remediation Runner
 
-Build a GitHub-event-driven controller that turns a failed pull-request check
-into a reproduced failure, a bounded Devin investigation, and—only when
-authorized—a verified repair.
+Build a maintainer-authorized GitHub automation that turns one repository issue
+into one deterministic reproduction, one bounded Devin patch proposal, one
+clean-room verification, one controlled pull request, independently verified
+CI, and a visible terminal outcome on the issue.
 
-The automation should first answer:
+This is the best first implementation because it matches the original
+take-home goal directly:
 
-> What failed, does it reproduce at this exact SHA, is the pull request the
-> cause, and what is the smallest safe next action?
+- the trigger is a real issue in the target repository;
+- the authorization is a normal maintainer label;
+- Devin performs the repository-scale investigation and proposes the code
+  change;
+- a controlled writer publishes only after independent verification;
+- clean-room acceptance and repository CI provide deterministic proof; and
+- status, failure, and success remain visible in GitHub.
 
-That is a better adoption wedge than an LLM reviewer on every pull request or a
-specialized migration-only guard:
-
-- engineers already wait on failed checks;
-- the automation appears inside GitHub rather than a new dashboard;
-- read-only diagnosis creates value before write access is granted;
-- the same repository command can verify both the problem and the repair;
-- successful use has measurable outcomes: accepted diagnoses, invoked repairs,
-  and shorter time-to-green.
+The complete technical plan is in
+[GitHub Issue Remediation Automation](09-github-issue-remediation-implementation.md).
 
 ## Problem statement
 
-Superset's CI surface is intentionally broad. Pull requests can run Python unit
-and integration suites, frontend tests and lint, pre-commit, E2E, dependency
-checks, API drift checks, and database-specific jobs.
+A GitHub issue describes a desired change, but accepted issues still require a
+maintainer or contributor to:
 
-When one fails, the relevant context is distributed:
+1. understand whether the report is correct and sufficiently scoped;
+2. locate the relevant code and repository instructions;
+3. reproduce the behavior;
+4. select a minimal implementation;
+5. add or update tests;
+6. run repository checks;
+7. open a reviewable pull request; and
+8. communicate progress or blockers.
 
-- the workflow and failed job;
-- annotations, logs, screenshots, videos, or JUnit artifacts;
-- the pull-request diff and changed paths;
-- repository instructions and suite-specific replay commands;
-- prior failures of the same test or fingerprint;
-- whether the head branch is trusted and writable.
-
-A contributor often sees a red check before they have a useful diagnosis.
-Blind reruns may hide a flake, and generic log summaries do not tell an engineer
-whether or how to change code.
+Devin is useful because these steps require repository-scale reasoning and tool
+use rather than a fixed string-to-command mapping. The surrounding automation
+must still own authorization, state, deadlines, publication, and the
+independent success claim.
 
 ## Product boundary
 
-The first version handles one failed check on one open pull request at one
-immutable head SHA.
+The first version supports:
 
-It does not:
+- one configured repository;
+- one open issue;
+- one strict, machine-readable issue contract;
+- one `devin:fix` authorization label;
+- one active remediation generation;
+- one configured Devin playbook;
+- one pinned target SHA and clean preflight;
+- one bounded, read-only Devin session;
+- one clean verifier and controlled writer;
+- one linked pull request; and
+- one configured set of required GitHub checks.
 
-- review every line of every pull request;
-- rerun every failed workflow automatically;
-- claim a flake from one failed attempt;
-- edit an untrusted fork;
-- modify multiple unrelated subsystems;
-- merge, close, or approve pull requests;
-- treat Devin's explanation as the success oracle.
+It does not run on every public issue, write to the default branch, merge,
+approve, bypass protection, pass publisher credentials to Devin, or claim
+success from session status alone.
 
-## Architecture
+## Architecture decision
 
-```text
-GitHub workflow_run/check event
-  -> event validator and PR resolver
-  -> idempotency and fingerprint store
-  -> log/artifact and changed-path collector
-  -> deterministic focused replay
-  -> investigator Devin session
-  -> structured classification and PR diagnosis
-  -> policy gate: read-only / authorized repair
-  -> remediation Devin session
-  -> repeat the same focused replay
-  -> GitHub output and adoption metrics
-```
-
-The controller owns facts, state, policy, and verification. Devin owns
-repository-scale diagnosis and bounded code changes.
-
-## Trigger and correlation
-
-The production trigger is a completed failed `workflow_run` or check event. A
-saved event payload provides a deterministic local demo path.
-
-For every accepted event, resolve and persist:
-
-- repository and installation;
-- delivery ID and workflow run ID;
-- pull-request number;
-- immutable head SHA;
-- workflow, job, and failed step;
-- actor, author association, and fork status;
-- changed paths;
-- artifact URLs and retention status;
-- failure fingerprint;
-- selected replay command and timeout.
-
-If the run does not map to one open pull request and one head SHA, finish with
-`not_actionable` instead of guessing.
-
-## Idempotency
-
-Duplicate webhook delivery must not create duplicate comments, Devin sessions,
-or repairs.
-
-Use two keys:
+Use **GitHub Actions dispatcher plus scheduled reconciler** for the pilot.
 
 ```text
-delivery_key = repository + delivery_id
-failure_key  = repository + pr + head_sha + workflow + job + fingerprint
+issues.labeled(`devin:fix`)
+  -> validate contract, authorize, pin SHA, and reproduce
+  -> claim
+  -> create Devin session
+  -> publish queued/running state
+
+schedule / workflow_dispatch
+  -> poll session
+  -> validate structured patch
+  -> clean-room policy and acceptance verification
+  -> recheck target SHA and publish one PR
+  -> read required checks
+  -> publish terminal outcome
 ```
 
-The delivery key absorbs GitHub retries. The failure key absorbs equivalent
-events and repeated controller processing. A new head SHA creates a new
-evaluation because the evidence and repair target changed.
+This is stronger than a one-shot workflow because a Devin session outlives the
+dispatcher. It is faster to deliver than a custom public webhook controller
+because GitHub supplies event delivery, identity, permissions, scheduling,
+logs, summaries, artifacts, and the user-facing issue and PR surfaces.
 
-## Evidence collection
+Use a small Python package for orchestration rather than embedding state
+decisions in shell and YAML. The same package runs with fake adapters in Docker
+for deterministic replay.
 
-Before starting Devin, the controller should gather the smallest useful
-evidence bundle:
+## Why not start with a standalone controller
 
-1. failed job and step metadata;
-2. focused log excerpts around the first actionable error;
-3. test reports and available screenshots or traces;
-4. pull-request diff and changed paths;
-5. workflow definition and repository instructions;
-6. prior occurrences of the same normalized fingerprint;
-7. a candidate replay command.
+A GitHub App, database, queue, and workers are the correct production shape
+when the system spans many repositories or requires immediate callbacks and
+centralized analytics. They are not prerequisites for proving one
+issue-to-remediation loop.
 
-Normalize unstable values such as timestamps, worker IDs, temporary paths, and
-random ports before fingerprinting. Preserve the original artifact alongside
-the normalized fingerprint.
+The Actions-native pilot still has explicit:
 
-## Selecting the replay command
+- per-issue concurrency;
+- durable state in one versioned issue comment;
+- API and domain idempotency;
+- scheduled restart recovery;
+- timeout and cancellation;
+- independent PR verification;
+- structured artifacts; and
+- a production migration threshold.
 
-The controller should use deterministic mappings before asking Devin:
+## Trigger and authorization
 
-| Failure evidence | First replay target |
-|---|---|
-| Python test node ID | Exact `pytest` node |
-| Jest test file or test name | Exact test file and name filter |
-| Pre-commit hook | Named hook against changed files |
-| Playwright test | Exact spec and project where available |
-| Dependency or generated-file check | Repository-provided checker |
-| No reliable target | Mark `insufficient_replay_evidence` |
+Trigger only when a maintainer applies `devin:fix`. Do not automatically send
+all newly opened public issues to Devin.
 
-Changed paths and the workflow definition can narrow the environment, but they
-must not silently replace the command CI actually ran. Persist both the CI
-command and the focused replay command.
+The dispatcher validates:
 
-The replay result is evidence, not an absolute classifier:
+- repository ID and kill switch;
+- issue state and type;
+- exact label;
+- actor permission resolved through the GitHub API;
+- strict contract fields, command IDs, allowed paths, and risk tier;
+- immutable target SHA and deterministic preflight evidence;
+- absence of another active generation; and
+- the versioned state record after claiming it.
 
-- a repeatable failure supports investigation;
-- a passing replay may indicate a flake, environment difference, or incomplete
-  reproduction;
-- an unavailable environment is an explicit terminal outcome, not permission
-  to speculate.
+A trusted issue form may auto-apply the label later. That expansion should
+follow measured quality, cost, and failure handling.
 
-## Failure classification
+## Devin API
 
-The investigator returns exactly one primary classification:
-
-| Classification | Required evidence | Default next action |
-|---|---|---|
-| `change_caused` | Failure reproduces and connects to changed behavior | Offer bounded repair |
-| `likely_flaky` | Same fingerprint has inconsistent outcomes or repeated prior evidence | Record recurrence; investigate stabilization |
-| `infrastructure` | Evidence points to runner, network, service, quota, or artifact failure | Recommend rerun; no code repair |
-| `generated_drift` | Repository checker proves stale generated output | Offer mechanical repair |
-| `unresolved` | Evidence is contradictory or insufficient | Request human decision |
-
-A single green rerun is not enough to label a test flaky. The result should
-state what was observed and which evidence is still missing.
-
-## Investigator Devin session
-
-Create one investigator session per failure key.
-
-### Inputs
-
-- repository and immutable SHA;
-- pull-request diff and changed paths;
-- failed workflow/job/step;
-- focused logs and artifacts;
-- original and replay commands with outcomes;
-- prior fingerprint occurrences;
-- repository instructions;
-- allowed read scope and deadline.
-
-### Responsibilities
-
-1. reproduce or explain why reproduction is incomplete;
-2. identify the first causal failure rather than downstream noise;
-3. connect the failure to the diff and surrounding code;
-4. classify it using the allowed taxonomy;
-5. propose the smallest safe next action;
-6. name the exact verification command;
-7. identify uncertainty without inventing evidence.
-
-### Structured output
-
-```json
-{
-  "classification": "change_caused",
-  "summary": "Changed validation rejects an existing empty-value case.",
-  "evidence": [
-    "Focused test fails at the pull-request head SHA",
-    "The failure begins in a changed validation branch"
-  ],
-  "replay_command": "pytest tests/unit_tests/example_test.py::test_empty_value",
-  "repair_recommended": true,
-  "allowed_paths": [
-    "superset/example.py",
-    "tests/unit_tests/example_test.py"
-  ],
-  "confidence": "high",
-  "unknowns": []
-}
-```
-
-Reject malformed output and expose the validation failure. Do not infer
-authorization from `repair_recommended`.
-
-## Pull-request diagnosis
-
-The first useful product output is read-only. Publish one updateable GitHub
-Check or compact comment containing:
-
-- failed workflow and job;
-- classification;
-- whether focused replay failed, passed, or was unavailable;
-- two or three evidence bullets;
-- exact replay command;
-- recommended next action;
-- linked controller run and Devin session;
-- explicit uncertainty;
-- repair authorization instructions when eligible.
-
-Update the same artifact for the same failure key rather than creating a stream
-of bot comments.
-
-## Repair authorization
-
-Use a gradual trust model:
-
-1. **Untrusted fork:** read-only diagnosis. Never expose privileged secrets or
-   write to the contributor's branch.
-2. **Trusted branch without opt-in:** diagnosis plus an offered `/devin fix`
-   command or label.
-3. **Trusted branch with opt-in:** bounded remediation session.
-4. **Allowlisted repeatable failure class:** optional automatic remediation
-   only after pilot metrics justify it.
-
-The demo should use a trusted fork branch and explicit authorization so the
-permission transition is visible.
-
-## Remediation Devin session
-
-The remediation session receives the validated investigation, not the entire
-unfiltered workflow log.
-
-Its contract is:
-
-- start from the exact investigated SHA;
-- edit only the approved path set;
-- preserve the pull request's intent;
-- make the smallest repair;
-- do not weaken, delete, skip, or broadly relax tests;
-- do not add retries as a substitute for a root-cause fix;
-- run the focused replay command;
-- run the affected suite when feasible;
-- return changed files, commands, results, residual risk, and a concise commit
-  message.
-
-The controller independently reruns the focused command. Devin cannot mark its
-own change successful.
-
-If verification fails, the system may send one evidence-rich follow-up to the
-same session. Further attempts require a new decision rather than an unbounded
-repair loop.
-
-## State machine
+Use the current organization-scoped v3 lifecycle consistently:
 
 ```text
-received
-  -> rejected
-  -> deduplicated
-  -> evidence_collecting
-  -> not_actionable
-  -> replaying
-  -> replay_failed
-  -> replay_passed
-  -> investigating
-  -> diagnosis_published
-  -> awaiting_authorization
-  -> remediation_running
-  -> verification_running
-  -> repaired
-  -> repair_failed
-  -> timed_out
-  -> malformed_output
-  -> cancelled
+POST   /v3/organizations/{org_id}/sessions
+GET    /v3/organizations/{org_id}/sessions
+GET    /v3/organizations/{org_id}/sessions/{devin_id}
+DELETE /v3/organizations/{org_id}/sessions/{devin_id}
 ```
 
-Each transition records a timestamp, correlation IDs, evidence references,
-duration, and reason. Terminal states must remain queryable after the process
-restarts.
+The create request should:
 
-## Failure handling
+- set a positive `max_acu_limit`;
+- select one reviewed `playbook_id`;
+- restrict `repos` to `ong6/superset`;
+- pass explicit empty secret and knowledge lists by default;
+- set `resumable: false`;
+- require a versioned, bounded structured-output schema containing outcome,
+  summary, unified diff, claimed paths, evidence, and verification commands;
+- add repository, issue, generation, workflow, and run-key tags; and
+- give the selected Devin identity read-only repository access.
 
-| Failure | Behavior |
-|---|---|
-| Duplicate delivery | Return the existing run |
-| Missing or expired artifact | Continue with logs; mark evidence gap |
-| No associated pull request | Finish `not_actionable` |
-| Head SHA changed during work | Cancel repair and start a new evaluation |
-| Replay timeout | Publish timeout and exact attempted command |
-| Devin timeout or cancellation | Publish terminal state; preserve evidence |
-| Malformed Devin output | Reject it; do not open a repair |
-| GitHub rate limit | Retry with bounded backoff and persisted state |
-| Verification failure | Keep diagnosis, mark repair failed, do not claim success |
+The dispatcher stores the returned session ID and URL immediately. The
+reconciler evaluates both `status` and `status_detail`, validates structured
+output, and never treats session completion as proof of a correct repair.
+`waiting_for_user` and `waiting_for_approval` are unattended
+`interaction_required` failures. Because v3 creation has no idempotency field,
+an ambiguous create is reconciled by exact unique tags in a bounded recent
+session listing; it is never retried blindly.
+
+## State model
+
+```text
+requested
+  -> validated
+  -> authorized
+  -> target_pinned
+  -> evidence_ready
+  -> claimed
+  -> creating_session
+  -> session_running
+  -> proposed
+  -> verifying
+  -> publishing
+  -> pull_request_open
+  -> ci_verifying
+  -> succeeded
+```
+
+Visible nonterminal states:
+
+```text
+cancelling
+```
+
+Visible terminal outcomes:
+
+```text
+succeeded
+duplicate
+rejected
+no_change
+blocked
+failed
+verification_failed
+policy_violation
+stale
+publish_failed
+timed_out
+cancelled
+```
+
+Track the pull request's later business result independently:
+
+```text
+no_pull_request
+pull_request_open
+ci_green
+merged
+closed_unmerged
+```
+
+This separation avoids false statements such as calling an API `finished`
+status a verified remediation or calling an unmerged CI-green PR a business
+failure.
+
+## Success and failure
+
+Publish `succeeded` only when:
+
+- one terminal session returned valid structured output;
+- its patch applied to a clean checkout at the pinned SHA;
+- Git-derived paths and file modes passed policy;
+- controller-owned acceptance commands passed;
+- the target branch still matched the pinned SHA before publication;
+- the controlled writer produced one valid linked PR;
+- the PR is in the configured repository and targets the configured branch;
+- its head SHA is stable;
+- the issue link is present;
+- policy inspection did not reject the diff; and
+- every configured required check passed.
+
+Failures use bounded machine-readable reasons:
+
+- invalid or unauthorized event;
+- invalid issue contract or failed reproduction;
+- duplicate generation;
+- API create rejected or ambiguous;
+- API polling exhausted;
+- interaction required, suspended, or malformed structured output;
+- no proposal, patch application, policy, verification, or stale-SHA failure;
+- controlled publication failure;
+- invalid PR;
+- required check failed or missing;
+- timeout;
+- user cancellation; or
+- unsupported API status.
+
+The status comment should include the next operator action for recoverable
+states.
+
+## Idempotency and recovery
+
+Define:
+
+```text
+run_key =
+  github:{repository_id}:issue:{issue_node_id}:generation:{generation}
+```
+
+Use four defenses:
+
+1. an Actions concurrency group per issue;
+2. one durable hidden state record in the issue status comment;
+3. unique v3 session tags and no blind ambiguous-create retry; and
+4. idempotent reconciliation that updates existing labels and comments.
+
+Do not blindly retry an ambiguous session create. Query by unique tags first,
+then require an operator decision if the API cannot prove whether creation
+succeeded.
+
+Scheduled reconciliation is restart recovery. It resumes from the stored
+session ID, Devin state, proposal or published PR, and GitHub checks after any
+Actions job exits or fails.
+
+## Security
+
+- Treat issue text, repository content, session output, and PR metadata as
+  untrusted.
+- Keep `DEVIN_API_TOKEN`, `GITHUB_TOKEN`, and publisher credentials in Actions
+  only.
+- Give the workflow the minimum GitHub permissions for its current phase.
+- Give Devin no organization secrets by default.
+- Give Devin read-only repository access and require structured patch output.
+- Build prompts from parsed event data; never interpolate issue text into a
+  shell script.
+- Apply the patch in a fresh checkout at the pinned SHA, derive changed paths
+  from Git, and run only allowlisted argv commands.
+- Re-resolve the target SHA immediately before publication.
+- Let a controlled writer mint a short-lived GitHub App installation token
+  only after verification, then create or update the bot branch and PR.
+- Protect the default branch and require review and CI.
+- Validate the published PR before monitoring or publishing success.
+- Revoke work when the issue closes or authorization is removed.
+- Pin third-party Actions by full commit SHA.
+- Bound prompt, issue text, retries, ACU, wall clock, and active runs.
+- Provide a repository-variable kill switch.
+
+## Observability
+
+The user-facing status is one issue comment plus one status label. The comment
+shows:
+
+- current phase and last update;
+- session and pull-request links;
+- target SHA, evidence hash, patch hash, and policy version;
+- preflight and clean-room verification result;
+- required-check progress;
+- elapsed time;
+- terminal outcome and reason; and
+- run key and generation.
+
+Each Actions execution also emits:
+
+- a step summary;
+- structured redacted logs;
+- a versioned `run.json` transition artifact; and
+- an explicit success, retryable failure, permanent failure, or no-op exit.
+
+The aggregate pilot report covers:
+
+- authorized issues, sessions, PRs, CI-green PRs, and merges;
+- active runs and oldest active age;
+- duplicates, blocks, failures, timeouts, and cancellations;
+- issue-to-session, issue-to-PR, and issue-to-green latency;
+- invalid or CI-failing PRs;
+- ACU per session and CI-green PR; and
+- missing cost or usage data as an explicit unknown.
+
+Initial safety objectives:
+
+- zero duplicate sessions per run key;
+- zero unauthorized default-branch writes;
+- zero CI-red or invalid PRs marked successful;
+- zero active runs older than twice their deadline; and
+- visible issue status within two minutes of authorization.
+
+## Pilot rollout
+
+### Stage 0: local replay
+
+Run saved issue, session, PR, check, duplicate, timeout, and cancellation
+fixtures through Docker with fake adapters.
+
+### Stage 1: live dry run
+
+The label creates a status record and validates configuration but does not call
+Devin.
+
+### Stage 2: live session, read-only repository access
+
+Devin investigates and returns bounded structured output, but cannot publish a
+branch.
+
+### Stage 3: clean verification and controlled publication
+
+The controller verifies the patch, rechecks the target SHA, and lets the
+controlled writer open the PR. GitHub CI and human review remain mandatory.
+
+### Stage 4: broader intake
+
+Only after pilot gates pass, add trusted issue forms, more repositories, or
+new triggers such as failed CI, rebase conflicts, and release backports.
+
+## Stop conditions
+
+Disable new dispatch immediately when:
+
+- a duplicate session is created for one run key;
+- a workflow or session attempts an unauthorized write;
+- an invalid or CI-red PR is marked successful;
+- secret material appears in logs or artifacts;
+- API status changes fail closed repeatedly; or
+- the oldest active run exceeds twice its configured deadline.
+
+Existing sessions may be reconciled or cancelled while the dispatch kill switch
+is active.
 
 ## Demo fixture
 
-Use a small, realistic unit-test regression rather than an artificial syntax
-error.
+Use one honest Superset issue with:
 
-Example:
+- a reproducible, narrowly scoped defect;
+- clear expected behavior;
+- a strict contract with controller-owned reproduction and acceptance command
+  IDs;
+- one focused failing test;
+- one low-risk allowed-path set;
+- a small production-code repair; and
+- normal repository CI coverage.
 
-1. a trusted fork pull request changes a validation helper;
-2. one existing edge case fails in a focused Python or frontend unit test;
-3. the saved failed workflow event is replayed;
-4. the controller extracts the test and reproduces it;
-5. Devin connects the changed branch to the failing assertion;
-6. the pull request receives a read-only diagnosis;
-7. a maintainer authorizes `/devin fix`;
-8. Devin makes a minimal implementation repair;
-9. the controller runs the exact test and shows it turn green.
+Demo:
 
-Also replay:
+1. apply `devin:fix`;
+2. show queued and running status;
+3. show exactly one linked session;
+4. show the structured patch and clean verifier pass;
+5. show the controlled remediation PR;
+6. show required CI turn green;
+7. show the issue outcome become `succeeded`;
+8. replay the label event and show no duplicate; and
+9. show one stale, cancelled, or verification-failed fixture with an
+   actionable terminal reason.
 
-- the same event twice to prove deduplication;
-- a simulated infrastructure log to prove no code session is started;
-- malformed session output to prove validation;
-- a fork event to prove the read-only policy.
+## Implementation order
 
-## Metrics
-
-### Adoption
-
-- pull requests receiving a diagnosis;
-- diagnosis reactions or maintainer acceptance;
-- `/devin fix` invitations and invocations;
-- repeat users and repositories;
-- suggested repairs accepted or merged;
-- automation disable, dismissal, and false-positive rates.
-
-### Engineering outcomes
-
-- median time from failed check to diagnosis;
-- median time from failed check to green;
-- reproduction rate;
-- first-session repair success;
-- reruns avoided;
-- maintainer interventions;
-- flaky fingerprint recurrence;
-- unresolved rate.
-
-### Efficiency
-
-- Devin sessions per successful rescue;
-- wall-clock and active session duration;
-- ACU or cost per triage and repair;
-- CI minutes consumed by replay;
-- estimated manual minutes avoided.
-
-Success is not the number of Devin sessions created. A strong pilot creates
-fewer, better-scoped sessions and shows that engineers act on their output.
-
-## Pilot gates
-
-Before enabling broader repair:
-
-- at least 80% of sampled diagnoses are judged useful by maintainers;
-- no privileged write is performed on untrusted forks;
-- every repair has independent replay evidence;
-- duplicate events create no duplicate sessions or comments;
-- false `change_caused` classifications stay below an agreed threshold;
-- cost and latency are visible per run;
-- maintainers can disable the automation or cancel a run immediately.
-
-These are proposed pilot thresholds, not claims about existing performance.
-
-## Implementation sequence
-
-This is a compact four-step sequence, not a four-day estimate.
-
-### Step 1 — evidence and replay
-
-- Define the normalized event, run, fingerprint, and classification schemas.
-- Add one saved failed-run fixture and one realistic failing pull request.
-- Implement PR/SHA resolution, log parsing, and focused replay.
-
-### Step 2 — investigation and read-only output
-
-- Add persistent idempotency and state transitions.
-- Create and poll the bounded investigator session.
-- Validate structured output and update one GitHub Check or comment.
-
-### Step 3 — opt-in repair
-
-- Enforce fork, branch, path, and command policies.
-- Add label or `/devin fix` authorization.
-- Create the remediation session and independently verify its change.
-
-### Step 4 — reliability and measurement
-
-- Exercise duplicate, timeout, malformed-output, stale-SHA, infrastructure, and
-  untrusted-fork paths.
-- Publish adoption, engineering-outcome, latency, and cost metrics.
-- Finalize the Docker workflow, runbook, architecture, and presentation.
-
-## Five-minute presentation
-
-1. **Problem:** many pull requests and broad CI create repeated failed-check
-   diagnosis work.
-2. **Adoption thesis:** meet engineers in GitHub and begin read-only.
-3. **Live loop:** replay a failed run, reproduce it, and publish a diagnosis.
-4. **Controlled autonomy:** authorize a bounded repair and show the same test
-   turn green.
-5. **Trust evidence:** deduplication, fork restrictions, terminal states, and
-   independent verification.
-6. **Business result:** shorter time-to-green, fewer blind reruns, accepted
-   repairs, and measurable cost.
+1. Build the typed local controller and fixtures.
+2. Add dispatch, reconcile, cancel, and report workflows.
+3. Configure the Devin API token and organization ID, playbook, read-only
+   service identity, publisher identity, labels, command policy, required
+   checks, and kill switch.
+4. Run dry mode and failure-path tests.
+5. Enable one scoped remediation issue.
+6. Capture the success and non-success run artifacts.
+7. Review pilot outcomes before enabling additional issues or triggers.
 
 ## Expansion path
 
-After the general failed-check loop earns trust, add specialized handlers:
+Failed-check repair remains a strong second trigger after the issue loop works.
+It can reuse:
 
-1. flaky-test recurrence and stabilization;
-2. stale pull-request action queues;
-3. dependency pin regeneration;
-4. migration upgrade/downgrade rehearsal;
-5. OpenAPI and generated-artifact drift;
-6. accessibility or performance regression response.
+- authorization and policy;
+- session creation and polling;
+- state and failure taxonomy;
+- status rendering;
+- retry, timeout, cancellation, and kill switch;
+- PR validation and independent CI proof; and
+- metrics and reporting.
 
-These extensions reuse the same event correlation, session lifecycle,
-authorization, GitHub output, idempotency, and metrics platform. The first
-automation therefore proves an adoption surface and creates infrastructure for
-the narrower high-value ideas rather than discarding them.
+Move the coordinator to an external GitHub App controller when repository count,
+event volume, reconciliation latency, central audit retention, or policy
+complexity exceed the Actions-native pilot.

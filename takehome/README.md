@@ -25,44 +25,52 @@ automation built around the Devin API and this Superset fork.
 ## Documents
 
 1. [Goal and success criteria](01-goal.md)
-2. [Ranked automation ideas](02-ideas.md)
+2. [Evaluated automation ideas](02-ideas.md)
 3. [Superset codebase overview](03-codebase-overview.md)
 4. [Architecture map](architecture/README.md)
-5. [Focused comparison of the three candidate automations](05-three-idea-evaluation.md)
-6. [Failing Check Repair technical specification](06-failing-check-repair-technical-spec.md)
-7. [Ready-for-review CI rescue test cases](07-ready-for-review-ci-cases.md)
-8. [Detailed recommendation and implementation design](04-recommendation.md)
+5. [Recommendation and next steps](04-recommendation.md)
+6. [Prior candidate comparison](05-three-idea-evaluation.md)
+7. [Future CI-rescue technical specification](06-failing-check-repair-technical-spec.md)
+8. [Future CI-rescue test cases](07-ready-for-review-ci-cases.md)
+9. [Future CI-rescue implementation design](08-product-implementation-design.md)
+10. [GitHub issue remediation implementation](09-github-issue-remediation-implementation.md)
 
 ## Recommended direction
 
-Build the **PR CI Rescue Autopilot**: a GitHub-event-driven controller that
-turns a failed pull-request check into a reproduced failure, a bounded Devin
-investigation, and—when authorized—a verified repair.
+Build the **GitHub Issue Remediation Runner**: a maintainer-authorized GitHub
+Action that turns a strict repository issue contract into one bounded Devin
+patch proposal, one independently verified pull request, and one observable
+status record on the issue.
 
-This direction starts with a workflow engineers already feel:
+This is the authoritative take-home direction:
 
-- Apache Superset has hundreds of open pull requests and a broad CI surface;
-- failed tests and checks consume contributor and maintainer attention before
-  review can continue;
-- Devin works inside the pull request rather than asking engineers to adopt a
-  separate product surface;
-- deterministic commands verify the diagnosis and repair;
-- the pilot can begin read-only, then add opt-in remediation after trust is
-  established.
+- a maintainer applies `devin:fix` to an open issue;
+- a dispatcher validates the contract, pins the target SHA, reproduces the
+  issue, and claims one remediation generation;
+- the workflow creates a bounded Devin API session;
+- Devin investigates and returns a structured patch without publisher access;
+- a clean verifier enforces policy and acceptance before a controlled writer
+  opens a pull request;
+- a scheduled reconciler publishes queued, active, blocked, failed, cancelled,
+  timed-out, or successful status; and
+- clean-room acceptance and the repository's normal pull-request CI, not
+  Devin's self-report, decide whether the remediation succeeded.
 
-The focused comparison independently evaluates a **Rebase Conflict Resolver**,
-**Failing Check Repair Tool**, and **Release Cherry-Pick Tool**. It ranks failed
-check repair first, then shows how the other two can reuse the same event,
-session, policy, verification, publishing, and observability platform.
+The pilot uses GitHub Actions for dispatch, reconciliation, cancellation, and
+reporting. This produces a working integration without first deploying a
+public webhook service, queue, or database. A small tested Python package owns
+the state machine and API contracts and can replay the same events in Docker.
 
-The Failing Check Repair technical specification expands that decision into the
-controller architecture, Devin API contracts, deterministic report-budget test
-case, security gates, observability metrics, pilot scorecard, and follow-up
-implementation sequence for a VP Engineering technical review.
+The
+[implementation document](09-github-issue-remediation-implementation.md)
+contains the architecture comparison, API contract, workflow skeletons,
+idempotency strategy, security boundaries, state and failure model,
+observability design, test plan, and production expansion criteria.
 
-The ready-for-review test cases make the product boundary executable: draft CI
-never starts Devin, a fresh failed run after `ready_for_review` does, and
-duplicate, stale, or re-drafted runs fail closed.
+The earlier failing-check, rebase, release, and migration analyses remain
+useful evaluated options and future trigger adapters. They are not the selected
+first implementation and should not be read as overriding the issue-to-PR
+goal.
 
 ## Devin skills
 

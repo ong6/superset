@@ -17,26 +17,25 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Ranked Automation Ideas
+# Evaluated Automation Ideas
 
 ## Re-evaluation principle
 
-The first ranking optimized for technical depth and a compact deterministic
-demo. That favored migration rehearsal, but it underweighted the most important
-product question:
+The take-home originally required one successful issue-to-remediation path.
+Later analysis drifted toward using a failed pull-request check as the primary
+trigger. That is a strong extension, but it does not match the first
+implementation goal as directly as a GitHub issue.
 
-> Will engineers choose to rely on Devin in their daily delivery workflow?
+The authoritative product question is:
 
-The revised ranking starts with observed engineering pain. A 2026-09-08 GitHub
-API snapshot showed 431 open Apache Superset pull requests, including 205 older
-than 30 days and 132 older than 90 days. The repository has 52 GitHub workflow
-definitions, and recent failed runs span Python, frontend, E2E, pre-commit, and
-database-specific suites.
+> Can a maintainer authorize one real issue and receive a reviewable,
+> independently verified remediation pull request with observable status and
+> failure handling?
 
-This does not mean every old pull request has a test failure. It means that PR
-throughput is a high-volume surface, and failed-check diagnosis is a recurring
-blocker inside it. An automation that shortens that loop has a broader path to
-adoption than one limited to migration changes.
+The selected build is therefore the **GitHub Issue Remediation Runner**.
+Earlier failed-check, rebase, release, flaky-test, and migration ideas remain
+valuable future triggers for the same session, policy, verification, and
+observability platform.
 
 ## Revised evaluation method
 
@@ -52,63 +51,48 @@ Ideas lose points when they require a new dashboard engineers must remember to
 visit, produce generic summaries, need broad write access on day one, or address
 only a small fraction of pull requests.
 
-## Focused three-candidate decision
+## Current decision
 
-The requested comparison is documented in
-[the standalone three-idea evaluation](05-three-idea-evaluation.md). Its
-independent evaluations and common rubric produce this order:
+| Candidate | Role | Decision |
+|---|---|---|
+| GitHub Issue Remediation Runner | Original issue-to-PR goal | **Build first** |
+| Failing Check Repair Tool | Automatic CI-triggered remediation | Add after the issue loop works |
+| Rebase Conflict Resolver | Pull-request maintenance | Platform extension |
+| Release Cherry-Pick Tool | Release maintenance | Platform extension |
+| Migration Upgrade Contract Guardian | Specialized deterministic guard | Domain adapter |
 
-| Candidate | Score | Decision |
-|---|---:|---|
-| Failing Check Repair Tool | 9.1 | Build first |
-| Rebase Conflict Resolver | 8.8 | First platform extension |
-| Release Cherry-Pick Tool | 8.2 | Second platform extension |
-
-The rebase resolver has an unusually concrete adoption surface: a
-2026-09-08 public GitHub snapshot found 168 of 431 open Superset pull requests
-carrying `requires:rebase`. It ranks just behind failed-check repair because
-semantic conflict resolution is harder to certify, publishing a rewritten
-candidate requires a stricter trust model, and a five-minute proof needs more
-oracles than one fail-before/pass-after test.
-
-Release cherry-picking is high-consequence but narrower. Superset already uses
-release labels and `cherrytree` for candidate discovery and clean mechanical
-picks. Devin adds the most value only for dependency ambiguity, semantic
-applicability, conflict resolution, and test selection.
+This is a sequence decision rather than a claim that issue remediation is
+always more frequent than failed CI. It wins the first build because it best
+matches the stated deliverable, has the shortest path to a real integration,
+keeps authorization explicit, and uses ordinary pull-request CI as the
+independent oracle.
 
 ## Recommendation
 
-Build the **PR CI Rescue Autopilot** first.
+Build the **GitHub Issue Remediation Runner** with:
 
-It turns a failed pull-request workflow into an evidence-rich diagnosis and,
-only when authorized, a verified repair. It fits the existing GitHub workflow,
-begins with read-only permissions, provides value to contributors and
-maintainers, and creates a direct adoption metric: do engineers use and accept
-its output?
-
-The first product gate is intentionally narrower than "run on every red
-check." Devin starts only when both the source CI event and a live provider
-lookup show that the pull request is open, out of draft, and still at the
-failed run's head SHA. A draft failure never becomes eligible retroactively;
-`ready_for_review` starts fresh CI, and only that review-ready execution may
-start Devin. The
-[ready-for-review test matrix](07-ready-for-review-ci-cases.md) defines the
-required lifecycle and showcase cases.
-
-For the requested three candidates, the backup option is the **Rebase Conflict
-Resolver**. It addresses visible, high-volume pain and gives Devin a strong
-two-sided intent-reasoning task, but safe semantic proof and publication are
-less compact than the failed-check repair loop.
+- `issues.labeled` and `devin:fix` as the first authorization event;
+- a strict issue contract, immutable target SHA, and deterministic preflight;
+- a GitHub Actions dispatcher that validates, claims, and creates one
+  read-only Devin session;
+- a scheduled reconciler that verifies the structured patch, publishes through
+  a controlled writer, and tracks PR and CI state;
+- one updateable issue comment and mutually exclusive status label;
+- cancellation when the issue closes or authorization is removed;
+- clean-room acceptance plus repository CI as the success oracle; and
+- a tested Docker-replayable Python controller package.
 
 The [detailed recommendation](04-recommendation.md) defines the selected
-failure contract, state machine, trust model, session boundaries, demo fixture,
-metrics, and implementation steps.
+product boundary and rollout. The
+[implementation design](09-github-issue-remediation-implementation.md) defines
+the exact architecture, API lifecycle, workflows, idempotency, security,
+status, failure taxonomy, observability, and tests.
 
-## Broader discovery inventory
+## Prior discovery inventory
 
-The earlier inventory below retains additional expansion ideas and its original
-relative scores. The focused three-candidate scorecard is the authoritative
-decision for the take-home build.
+The earlier inventory below is retained as evidence for future trigger
+selection. Its original scores compare opportunity size and demo quality; they
+do not override the issue-to-remediation implementation decision.
 
 ### 1. PR CI Rescue Autopilot — 9.6
 

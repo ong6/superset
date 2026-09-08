@@ -54,11 +54,12 @@ Guided views focus the audience on the interactive query path, metadata and
 caching, asynchronous execution, and realtime status updates.
 
 The diagram was produced during codebase discovery, before the automation ideas
-were re-ranked for engineering-team adoption. Its migration callout should be
-read as one technically strong specialized use case. The selected first
-automation is the PR CI Rescue Autopilot described in the parent take-home
-documents, which operates outside the product runtime and can later route
-migration failures into a dedicated rehearsal.
+were re-ranked against the original issue-to-remediation deliverable. Its
+migration callout should be read as one technically strong issue fixture or
+future specialized adapter. The selected first automation is the GitHub Issue
+Remediation Runner described in the parent take-home documents. It operates
+outside the product runtime, invokes Devin after maintainer authorization, and
+uses Superset's existing pull-request CI to verify the resulting repair.
 
 ## Generation procedure
 

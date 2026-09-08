@@ -240,29 +240,26 @@ For this checkout:
 - the lightweight Docker stack serves the application through the frontend
   development proxy and reports a healthy backend container.
 
-## Pull-request and CI surface
+## GitHub issue, pull-request, and CI surface
 
 The repository contains 52 workflow definitions. They cover pull-request
 metadata, pre-commit, Python unit and integration tests, frontend tests and
 lint, Playwright and Cypress E2E, dependency consistency, OpenAPI drift,
 migration-head conflicts, and result-reporting workflows.
 
-The existing CI design already exposes the inputs a rescue controller needs:
+The repository exposes the inputs an issue-remediation controller needs:
 
-- `pull_request` and `workflow_run` events;
-- immutable pull-request head SHAs;
+- issue events, labels, comments, and actor identity;
+- pull-request events and immutable head SHAs;
 - changed-file filters and `scripts/change_detector.py`;
 - job logs, annotations, and uploaded test artifacts;
-- Python unit-test reporting and pull-request comments;
-- per-file Cypress execution and retry behavior;
+- pull-request checks and comments;
 - repository-provided focused commands for Python, frontend, pre-commit,
   Playwright, dependency, and generated-file checks.
 
-This breadth is the adoption opportunity and the design constraint. The
-automation should not invent one universal reproduction command. It should
-normalize the failed check, select the smallest repository-native command, and
-preserve the original CI evidence when focused replay differs from the hosted
-runner.
+This breadth is the verification opportunity and design constraint. Devin
+selects checks from repository context, while the controller requires the
+configured GitHub checks to pass before declaring an issue remediated.
 
 ## Where an automation should integrate
 
@@ -271,25 +268,25 @@ GitHub events, the GitHub API, the Devin API, Dockerized checks, and repository
 commands. That keeps the proof reusable and avoids adding take-home-specific
 runtime code to the product.
 
-For the recommended PR CI Rescue Autopilot:
+For the selected GitHub Issue Remediation Runner:
 
-- trigger on a failed `workflow_run` or check associated with an open pull
-  request;
-- correlate repository, pull request, immutable head SHA, workflow, job, and
-  artifacts;
-- deduplicate by delivery and normalized failure fingerprint;
-- combine logs and test artifacts with the pull-request diff and changed paths;
-- select and execute the smallest repository-native replay command;
-- start Devin with bounded evidence and classify the failure as change-caused,
-  likely flaky, infrastructure-related, generated drift, or unresolved;
-- publish a read-only diagnosis before requesting write permission;
-- allow remediation only for trusted branches or explicit maintainer opt-in;
-- constrain the remediation to approved paths and commands;
-- independently re-run the same focused command;
-- publish one updateable check or comment plus adoption, latency, outcome, and
-  cost metrics.
+- trigger when a maintainer applies `devin:fix` to an open issue;
+- validate a strict issue contract, resolve a full target SHA, and reproduce
+  the issue through a controller-owned command policy;
+- serialize and deduplicate one active remediation generation per issue;
+- create one bounded, read-only Devin API session with a reviewed playbook;
+- let Devin investigate and return a bounded structured patch;
+- derive the actual diff, enforce path and file-mode policy, verify it in a
+  clean checkout, recheck the target SHA, and publish through a controlled
+  writer;
+- keep Actions and publisher credentials outside the Devin session;
+- reconcile the session, pull request, and CI on a schedule;
+- publish one updateable issue comment and status label;
+- cancel when the issue closes or authorization is removed;
+- require configured GitHub checks to pass before success; and
+- report funnel, latency, reliability, quality, adoption, and ACU or explicit
+  cost unknowns.
 
 The architecture map in `takehome/architecture/` remains a system-level view of
-Superset. Its migration callout represents one specialized failure class that
-the same rescue platform can support later; it is not the selected first
-automation.
+Superset. Its migration callout and the repository's broad CI surface represent
+future issue types and trigger adapters; they are not the selected first event.
