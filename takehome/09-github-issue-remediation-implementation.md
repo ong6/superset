@@ -195,7 +195,7 @@ Use Actions concurrency to serialize work per issue:
 
 ```yaml
 concurrency:
-  group: devin-issue-${{ github.repository_id }}-${{ github.event.issue.number }}
+  group: devin-issue-${{ github.repository_id }}-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 ```
 
@@ -735,6 +735,11 @@ on:
   issues:
     types: [labeled]
   workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to dispatch
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -742,7 +747,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: devin-issue-${{ github.repository_id }}-${{ github.event.issue.number }}
+  group: devin-issue-${{ github.repository_id }}-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
@@ -757,10 +762,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ./takehome/issue_remediation
-      - run: python -m issue_remediation dispatch --event "$GITHUB_EVENT_PATH"
+      - run: >-
+          python -m issue_remediation dispatch
+          --event "$GITHUB_EVENT_PATH"
+          --issue-number "$ISSUE_NUMBER"
         env:
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
 ```
 
 ### Reconciler
