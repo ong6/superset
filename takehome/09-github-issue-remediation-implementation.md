@@ -44,11 +44,12 @@ small tested Python package that runs in Actions and in Docker locally. Store
 the durable user-facing state in GitHub, with the Devin session and pull
 request as linked execution records.
 
-The implementation has three workflows:
+The implementation has four workflows:
 
 1. **dispatch** on the `devin:fix` label;
 2. **reconcile** on a five-minute schedule and manual dispatch; and
-3. **cancel** when the issue closes or authorization is removed.
+3. **cancel** when the issue closes or authorization is removed; and
+4. **report** on a schedule or manual dispatch to aggregate pilot outcomes.
 
 An external controller is the production expansion path when multiple
 repositories, lower reconciliation latency, centralized policy, or stronger
