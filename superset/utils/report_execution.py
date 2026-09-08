@@ -52,7 +52,7 @@ def validate_report_execution_config(config: Mapping[str, Any]) -> None:
         raise ValueError("Report execution budget must be greater than zero")
     if any(reserve < 0 for reserve in reserves):
         raise ValueError("Report execution phase reserves cannot be negative")
-    if sum(reserves) >= budget:
+    if sum(reserves) > budget:
         raise ValueError(
             "Report execution phase reserves must total less than the execution budget"
         )
