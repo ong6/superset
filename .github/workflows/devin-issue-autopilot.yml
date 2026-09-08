@@ -313,11 +313,17 @@ jobs:
       - name: Release issue claim
         if: always() && steps.claim.outputs.claimed == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          AUTOPILOT_CLAIM_LABEL: ${{ steps.claim.outputs.claim_label }}
         with:
           script: |
             const { owner, repo } = context.repo;
             const issue_number = Number(process.env.ISSUE_NUMBER);
-            const claim = "${{ steps.claim.outputs.claim_label }}";
+            const claim = process.env.AUTOPILOT_CLAIM_LABEL;
+            if (!claim) {
+              core.setFailed("Claim label output is missing.");
+              return;
+            }
             let removed = false;
             for (let attempt = 1; attempt <= 3; attempt += 1) {
               try {
