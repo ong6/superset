@@ -159,10 +159,9 @@ datasources and translates semantic definitions into queries.
 ### Persistence
 
 The metadata database owns application state, not analytical facts. Alembic
-migrations under `superset/migrations/versions/` evolve this schema. This
-boundary makes migration correctness a strong automation target: a broken
-upgrade or downgrade can block every deployment while remaining deterministic
-to reproduce.
+migrations under `superset/migrations/versions/` evolve this schema. A broken
+upgrade or downgrade can block every deployment, making migration rehearsal a
+valuable specialized automation after a broader PR/CI workflow earns adoption.
 
 ### Asynchronous work
 
@@ -241,6 +240,30 @@ For this checkout:
 - the lightweight Docker stack serves the application through the frontend
   development proxy and reports a healthy backend container.
 
+## Pull-request and CI surface
+
+The repository contains 52 workflow definitions. They cover pull-request
+metadata, pre-commit, Python unit and integration tests, frontend tests and
+lint, Playwright and Cypress E2E, dependency consistency, OpenAPI drift,
+migration-head conflicts, and result-reporting workflows.
+
+The existing CI design already exposes the inputs a rescue controller needs:
+
+- `pull_request` and `workflow_run` events;
+- immutable pull-request head SHAs;
+- changed-file filters and `scripts/change_detector.py`;
+- job logs, annotations, and uploaded test artifacts;
+- Python unit-test reporting and pull-request comments;
+- per-file Cypress execution and retry behavior;
+- repository-provided focused commands for Python, frontend, pre-commit,
+  Playwright, dependency, and generated-file checks.
+
+This breadth is the adoption opportunity and the design constraint. The
+automation should not invent one universal reproduction command. It should
+normalize the failed check, select the smallest repository-native command, and
+preserve the original CI evidence when focused replay differs from the hosted
+runner.
+
 ## Where an automation should integrate
 
 The take-home controller should remain outside Superset and interact through
@@ -248,13 +271,25 @@ GitHub events, the GitHub API, the Devin API, Dockerized checks, and repository
 commands. That keeps the proof reusable and avoids adding take-home-specific
 runtime code to the product.
 
-For the recommended migration guardian:
+For the recommended PR CI Rescue Autopilot:
 
-- trigger on changes under `superset/migrations/versions/`;
-- inspect the Alembic revision graph;
-- build an isolated metadata database;
-- run upgrade, downgrade, and re-upgrade rehearsals;
-- start Devin only after a deterministic failure;
-- constrain Devin to the failing revision and migration tests;
-- re-run the same rehearsal on the remediation branch;
-- publish a check, issue, pull request, artifact, and run metrics.
+- trigger on a failed `workflow_run` or check associated with an open pull
+  request;
+- correlate repository, pull request, immutable head SHA, workflow, job, and
+  artifacts;
+- deduplicate by delivery and normalized failure fingerprint;
+- combine logs and test artifacts with the pull-request diff and changed paths;
+- select and execute the smallest repository-native replay command;
+- start Devin with bounded evidence and classify the failure as change-caused,
+  likely flaky, infrastructure-related, generated drift, or unresolved;
+- publish a read-only diagnosis before requesting write permission;
+- allow remediation only for trusted branches or explicit maintainer opt-in;
+- constrain the remediation to approved paths and commands;
+- independently re-run the same focused command;
+- publish one updateable check or comment plus adoption, latency, outcome, and
+  cost metrics.
+
+The architecture map in `takehome/architecture/` remains a system-level view of
+Superset. Its migration callout represents one specialized failure class that
+the same rescue platform can support later; it is not the selected first
+automation.

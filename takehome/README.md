@@ -32,15 +32,17 @@ automation built around the Devin API and this Superset fork.
 
 ## Recommended direction
 
-Build the **Migration Upgrade Contract Guardian**: a GitHub-event-driven
-controller that deterministically rehearses changed Alembic migrations,
-starts Devin only for reproduced failures, and tracks the path from detection
-to a passing remediation pull request.
+Build the **PR CI Rescue Autopilot**: a GitHub-event-driven controller that
+turns a failed pull-request check into a reproduced failure, a bounded Devin
+investigation, and—when authorized—a verified repair.
 
-The recommendation is intentionally narrow:
+This direction starts with a workflow engineers already feel:
 
-- deterministic database commands decide pass or fail;
-- Devin investigates and remediates one reproduced invariant violation;
-- GitHub issues, checks, pull requests, logs, and metrics make the result
-  observable;
-- the entire before-and-after loop fits a five-minute demonstration.
+- Apache Superset has hundreds of open pull requests and a broad CI surface;
+- failed tests and checks consume contributor and maintainer attention before
+  review can continue;
+- Devin works inside the pull request rather than asking engineers to adopt a
+  separate product surface;
+- deterministic commands verify the diagnosis and repair;
+- the pilot can begin read-only, then add opt-in remediation after trust is
+  established.

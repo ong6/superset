@@ -19,304 +19,240 @@ under the License.
 
 # Ranked Automation Ideas
 
-## Evaluation method
+## Re-evaluation principle
 
-Six independent scouting agents evaluated Superset from security governance,
-dependency maintenance, CI/test reliability, API contract quality, frontend
-quality, and release operations perspectives. A synthesis agent then rescored
-the candidates with this weighted rubric:
+The first ranking optimized for technical depth and a compact deterministic
+demo. That favored migration rehearsal, but it underweighted the most important
+product question:
+
+> Will engineers choose to rely on Devin in their daily delivery workflow?
+
+The revised ranking starts with observed engineering pain. A 2026-09-08 GitHub
+API snapshot showed 429 open Apache Superset pull requests, including 206 older
+than 30 days and 133 older than 90 days. The repository has 52 GitHub workflow
+definitions, and recent failed runs span Python, frontend, E2E, pre-commit, and
+database-specific suites.
+
+This does not mean every old pull request has a test failure. It means that PR
+throughput is a high-volume surface, and failed-check diagnosis is a recurring
+blocker inside it. An automation that shortens that loop has a broader path to
+adoption than one limited to migration changes.
+
+## Revised evaluation method
 
 | Dimension | Weight |
 |---|---:|
-| Business value | 20% |
-| Technical depth | 20% |
-| Devin-as-core-primitive fit | 25% |
-| Five-minute demo strength | 15% |
-| Implementation speed and feasibility | 20% |
+| Engineer pain frequency and reach | 25% |
+| Adoption, trust, and workflow fit | 25% |
+| Devin-as-core-primitive fit | 20% |
+| Deterministic verification and safety | 15% |
+| Five-minute demo and implementation feasibility | 15% |
 
-Ideas were penalized when they were too broad, depended on nondeterministic
-evidence, risked unsafe vulnerability framing, used Devin only as a summarizer,
-or lacked a crisp before-and-after demo. Only ideas scoring at least 8.0 were
-retained; overlapping ideas were consolidated.
+Ideas lose points when they require a new dashboard engineers must remember to
+visit, produce generic summaries, need broad write access on day one, or address
+only a small fraction of pull requests.
 
 ## Recommendation
 
-Build the **Migration Upgrade Contract Guardian** first.
+Build the **PR CI Rescue Autopilot** first.
 
-It has the best VP-level story: schema migrations are high-risk, the evidence is
-deterministic, the demo can show a clear failure-to-fix loop, and Devin performs
-the engineering investigation and remediation after a conventional oracle
-reproduces the failure.
+It turns a failed pull-request workflow into an evidence-rich diagnosis and,
+only when authorized, a verified repair. It fits the existing GitHub workflow,
+begins with read-only permissions, provides value to contributors and
+maintainers, and creates a direct adoption metric: do engineers use and accept
+its output?
 
-The backup option is **Python Pin Drift Autopilot**. It is easier to implement
-and operationally useful, but it is less technically deep than migration
-rehearsal.
+The backup option is **Flaky Test Triage and Stabilization**. It addresses the
+same visible pain with an even safer read-only start, but reliable flake proof
+often requires repeated runs and therefore produces a less compact demo.
 
-The [detailed recommendation](04-recommendation.md) explains the selected
-idea's migration contract, deterministic oracle, event state machine, Devin
-session boundaries, demo fixture, outputs, metrics, and implementation steps.
+The [detailed recommendation](04-recommendation.md) defines the selected
+failure contract, state machine, trust model, session boundaries, demo fixture,
+metrics, and implementation steps.
 
-## Top ideas
+## Ranked ideas
 
-### 1. Migration Upgrade Contract Guardian — 9.3
+### 1. PR CI Rescue Autopilot — 9.6
 
-**Problem:** Superset's single-head Alembic check is necessary but insufficient:
-a migration can have one valid head and still fail downgrade, re-upgrade,
-idempotency, or data-preservation expectations on a real database.
+**Problem:** A failed check stops review, but the useful evidence is fragmented
+across workflow jobs, logs, artifacts, changed files, and repository-specific
+commands. Contributors rerun jobs or wait for maintainers because they do not
+know whether the failure is caused by their change, a flake, infrastructure, or
+stale generated output.
 
-**Event trigger:** `pull_request` opened, reopened, or synchronized when
-`superset/migrations/versions` or migration-specific tests change; also a
-completed migration-head/check workflow failure.
+**Event trigger:** Completed failed `workflow_run` or check suite associated
+with an open pull request. A maintainer label or `/devin fix` command can
+authorize remediation after diagnosis.
 
-**Workflow:** A path-filtered PR event deduplicates by delivery ID and head SHA,
-then runs deterministic preflight for changed migration revisions. Disposable
-PostgreSQL and SQLite databases execute graph check, upgrade to the changed
-revision, downgrade to parent, re-upgrade, and matching migration tests. A Devin
-investigator receives the exact revision, graph, logs, snapshots, and failed
-invariant. Only a reproducible failure creates an issue. A remediation session
-then receives one revision and one invariant and makes the smallest fix plus a
-focused test.
+**Workflow:** Resolve the immutable head SHA and failed job, download logs and
+test artifacts, fingerprint the failure, and use workflow metadata plus changed
+paths to select the smallest replay command. Devin receives the diff, focused
+logs, related tests, repository instructions, and replay result. It classifies
+the failure as change-caused, flaky, infrastructure, generated-artifact drift,
+or unresolved. The controller posts a concise read-only diagnosis. For trusted
+branches or explicit maintainer authorization, a second session makes the
+smallest fix and reruns the same command.
 
-**Observable outputs:** GitHub Check matrix, structured JSON artifact, concise PR
-comment with failing revision and command, deduplicated GitHub issue, and linked
-remediation PR.
+**Observable outputs:** Pull-request check or comment with classification,
+evidence, exact rerun command, and recommended next action; linked Devin
+session; optional repair commit or companion pull request; structured run
+record.
 
-**Leadership metrics:** Migration PRs rehearsed, first-pass rate, failures by
-invariant and database, detection latency, median repair time, repeat-failure
-rate by release branch, Docker runtime, and migration coverage.
+**Adoption metrics:** Failed PRs triaged, reproduction rate, diagnosis
+acceptance, `/devin fix` invocations, time-to-diagnosis, time-to-green,
+first-repair success, repair merge rate, maintainer interventions, and cost per
+rescued pull request.
 
-**Demo seed:** Add a fork-only migration with one valid Alembic head and
-successful upgrade, but a downgrade that references a nonexistent table or
-constraint. Show the existing graph check passing, the round-trip rehearsal
-failing, Devin diagnosing and fixing the migration, and the same rehearsal
-passing.
+**Demo seed:** Open a trusted fork pull request whose changed production code
+breaks one focused Python or frontend unit test. Replay the failed event, show
+Devin reproduce and explain the failure, authorize the repair, and show the
+same scoped test turn green.
 
-**Why Devin:** Deterministic database commands decide pass/fail, while Devin maps
-the failure across Alembic code, migration conventions, and tests into a minimal
-repair.
+**Why Devin:** A static router can extract a failed test name. Devin connects
+the failure to the PR diff and surrounding code, chooses a minimal repair,
+implements it, and handles unfamiliar failure shapes without a hand-written
+rule per test suite.
 
-### 2. Python Pin Drift Autopilot — 9.3
+### 2. Flaky Test Triage and Stabilization — 9.1
 
-**Problem:** A PR can update `pyproject.toml` or requirement inputs while leaving
-generated requirement pins stale. Superset detects semantic drift, but automated
-regeneration is narrowly scoped to upstream Dependabot pip PRs.
+**Problem:** Reruns can turn red workflows green while preserving no durable
+answer about which tests are unstable, how often they fail, or why. Superset
+has both recent and historical reports of flaky frontend, E2E, and
+database-specific CI.
 
-**Event trigger:** Failed `Check Python Dependencies` check run, or PR changes to
-`pyproject.toml`, `requirements/*.in`, `superset-core/pyproject.toml`, or
-`superset-extensions-cli/pyproject.toml`.
+**Event trigger:** Failed and retried workflow completions, including successful
+reruns of the same SHA.
 
-**Workflow:** A failed check or dependency-source diff creates one immutable-SHA
-Devin session. Devin runs the repository lock-generation command, verifies
-`requirements/development` remains a superset of base with matching shared
-versions, summarizes material transitive changes, and classifies the result as
-clean, stale generated files, ambiguous resolver change, or unsafe/untrusted
-write. Trusted branches get a remediation session that regenerates the minimum
-required files.
+**Workflow:** Normalize JUnit, Jest, Playwright, Cypress, and job-log evidence
+into stable test fingerprints. A ledger records first-pass and rerun outcomes.
+Devin starts only after a fingerprint repeats or passes on rerun, then examines
+the test, product code, timing, artifacts, and prior occurrences. A repair
+session runs repeated focused verification before proposing stabilization.
 
-**Observable outputs:** GitHub Check summary with stale file set and pin delta,
-structured resolver report, optional issue for ambiguous constraints, and a
-remediation PR or commit containing regenerated requirements plus command
-transcript.
+**Observable outputs:** First-pass reliability check, flake ledger, deduplicated
+issue, reproduction command, and focused stabilization pull request.
 
-**Leadership metrics:** Events received and deduplicated, session-start latency,
-median detect-to-fix time, first-session remediation rate, stale files per event,
-pins changed per event, recurrence rate, estimated manual minutes avoided, ACU,
-and Docker runtime.
+**Adoption metrics:** First-pass pass rate, hidden-green count, retry minutes,
+repeat fingerprints, confirmed flakes, stabilization merge rate, and avoided
+reruns.
 
-**Demo seed:** Raise one direct lower bound in `pyproject.toml` but leave
-generated requirements stale. Show the dependency check failure, Devin's stale
-pin classification, a minimal regenerated-files remediation, and the invariant
-passing.
+**Demo seed:** Seed a focused test with a deterministic race switch so its first
+attempt fails and its retry passes. Show the automation preserve the hidden
+failure, reproduce the race, and remove it.
 
-**Why Devin:** The deterministic checker finds drift; Devin closes the loop by
-interpreting resolver deltas and preparing a trusted minimal fix.
+**Why Devin:** Parsing detects recurrence; Devin reasons about async behavior,
+fixtures, state leakage, and waits to create a real fix rather than adding
+another retry.
 
-### 3. Principal-Aware Authorization Regression Reproducer — 9.1
+### 3. PR Backlog Shepherd — 8.8
 
-**Problem:** Superset authorization spans principals, capabilities, resources,
-DAO filters, embedded/guest behavior, and Admin exceptions. Static checks can
-flag intentional designs while missing real object-scope regressions.
+**Problem:** A queue of hundreds of open pull requests makes it difficult to see
+which changes are one action away from review, which are blocked by conflicts
+or CI, and which need a product decision.
 
-**Event trigger:** PRs touching security manager, embedded or guest access,
-dashboard/chart/dataset APIs, DAO filters, filters, or related tests.
+**Event trigger:** Scheduled backlog sweep plus pull-request, review, and check
+events.
 
-**Workflow:** Security-sensitive PR events enter deterministic path/diff triage.
-Devin receives policy excerpts, changed symbols, and known
-principal/capability rows, then returns a candidate matrix: principal,
-role/capability, resource, action, expected allow/deny, and reproduction command.
-Only plausible rows start a Docker reproducer. Remediation starts only when an
-unauthorized operation succeeds reproducibly; undisclosed vulnerabilities stay
-private.
+**Workflow:** Deterministic rules collect age, last activity, review state,
+mergeability, failed checks, requested changes, and author association. Devin
+reads only the highest-value blocked candidates and proposes one concrete next
+action: fix CI, rebase, answer a review question, request a decision, or leave
+untouched. It never closes pull requests automatically.
 
-**Observable outputs:** Neutral GitHub Check/comment with role-resource-action
-matrix, command, redacted evidence, disposition, and session links; private
-advisory/private-fork issue for verified undisclosed vulnerabilities; public
-issue only for a disclosed demo fixture or test gap; focused regression-test PR.
+**Observable outputs:** Maintainer queue grouped by next action, opt-in pull
+request comment, and linked rescue sessions for selected candidates.
 
-**Leadership metrics:** Candidate/reproduced/rejected counts, false-positive
-rate, principal × capability × resource coverage, webhook-to-triage latency,
-webhook-to-proof latency, fix latency, remediation acceptance, ACU, and retries.
+**Adoption metrics:** Queue age, blocked-to-ready conversions, maintainer actions
+accepted, reopened conversations, time waiting for next action, and stale PRs
+resolved.
 
-**Demo seed:** Use a disclosed historical embedded guest-token boundary fix as a
-safe fixture by reverting the guest-only deny that prevents an embedded guest
-token from reaching a draft non-embedded dashboard outside its issued scope.
+**Demo seed:** Replay a small fixture set containing a failed-check PR, a
+conflicted PR, and a PR awaiting a maintainer decision. Show that the queue
+assigns different, evidence-backed next actions.
 
-**Why Devin:** Devin's value is mapping a diff to the correct principal,
-resource, and capability rule; runtime tests remain the oracle.
+**Why Devin:** Rules can sort by age; Devin can understand review threads,
+diffs, and repository context well enough to recommend the next engineering
+action.
 
-### 4. Semantic OpenAPI Breaking-Change Sentinel — 9.1
+**Why not first:** The business value is high, but the outcome is less
+deterministic and maintainers may distrust automated backlog judgments before
+seeing Devin succeed on narrower failed-check rescues.
 
-**Problem:** Superset's OpenAPI drift workflow proves the committed
-`openapi.json` was regenerated; it does not prove the regenerated spec is
-backward compatible for clients.
+### 4. Python Pin Drift Autopilot — 8.6
 
-**Event trigger:** PRs touching API, schema, OpenAPI artifact/test files, or
-contract-sensitive dependencies; failed OpenAPI drift checks enter diagnosis.
+**Problem:** Dependency-source changes can leave generated requirement pins
+stale, blocking a pull request with a mechanical but repository-specific repair.
 
-**Workflow:** A PR event regenerates normalized base/head specs and runs
-deterministic semantic rules: removed operations, newly required parameters,
-narrowed enum/type, incompatible response schema changes, unresolved component
-references, and description/order-only suppression. Devin receives rule-coded
-deltas and waiver policy, confirms impact and intent, deduplicates prior
-findings, and launches compatibility remediation only for confirmed breaks or
-explicit labels.
+**Event trigger:** Failed `Check Python Dependencies` run or changes to Python
+dependency inputs.
 
-**Observable outputs:** Required GitHub Check with rule IDs and affected
-operations, JSON/Markdown contract report, deduplicated issue per confirmed
-break, expiring waiver record, and focused compatibility PR.
+**Workflow:** Reproduce the repository dependency check. Devin interprets the
+resolver delta, regenerates only required files on an authorized branch, and
+reports material transitive changes. The original checker verifies the result.
 
-**Leadership metrics:** Breaking changes prevented, operations impacted,
-additive-to-breaking ratio, false-positive/waiver rate, session success rate,
-detection latency, median verified-remediation time, and recurring rule
-offenders.
+**Observable outputs:** Stale-file set, pin delta, resolver transcript, and
+optional repair.
 
-**Demo seed:** Remove or narrow a pinned field/reference from
-`DashboardRestApi.get_list`, regenerate `openapi.json`, and show ordinary drift
-passing while semantic compatibility fails.
+**Adoption metrics:** Dependency PRs rescued, first-fix success, resolver
+ambiguities, time-to-green, and recurrence.
 
-**Why Devin:** Rules detect the delta; Devin explains client impact, distinguishes
-additive changes from breaks, manages waiver context, and drafts a compatibility
-fix.
+**Demo seed:** Change a direct dependency bound without regenerating its pins.
 
-### 5. Retry-Hidden E2E Flake Ledger — 9.0
+**Why Devin:** The checker finds drift; Devin interprets and safely resolves the
+result.
 
-**Problem:** Cypress and Playwright retries can make a workflow green after an
-earlier failed attempt. A green workflow can hide first-pass instability, retry
-cost, and recurring flakes.
+**Why not first:** It is highly automatable but reaches a much smaller share of
+the engineering team and pull-request queue.
 
-**Event trigger:** Completion of Cypress or Playwright workflows, including
-successful conclusions; optional immediate event when retry configuration
-changes.
+### 5. Migration Upgrade Contract Guardian — 8.1
 
-**Workflow:** The controller parses Cypress attempt lines and Playwright JSON
-into normalized spec/test fingerprints. It updates a durable ledger and starts
-Devin only when attempts exceed a threshold or recur. Devin receives the exact
-fingerprint, artifacts, route/spec, and prior occurrences, then reproduces one
-bounded spec. A repair session starts only when instability is reproduced.
+**Problem:** A valid Alembic graph does not prove that a changed migration can
+upgrade, downgrade according to policy, and re-upgrade against a representative
+database.
 
-**Observable outputs:** GitHub Check summary on otherwise-green commits, durable
-fingerprint ledger, deduplicated flake issue with attempt history and artifact
-links, and focused stabilization/migration PR with before/after repeated-run
-evidence.
+**Event trigger:** Migration-related pull-request changes or failed migration
+checks.
 
-**Leadership metrics:** First-pass pass rate, hidden-green count, retry minutes,
-top recurring specs, p50/p95 attempts-to-pass, flake budget by suite,
-stabilized/migrated tests per month, and ACU per confirmed fingerprint.
+**Workflow:** Run a disposable database rehearsal and start Devin only for a
+reproduced invariant violation. Devin diagnoses and repairs the bounded
+migration failure; the same rehearsal verifies the fix.
 
-**Demo seed:** Add machine-readable attempt summary output to
-`scripts/cypress_run.py` and replay a spec that succeeds after an outer retry.
+**Observable outputs:** Migration check matrix, replay artifact, investigation,
+and focused repair.
 
-**Why Devin:** Deterministic parsing exposes hidden signal; Devin reproduces the
-specific flaky path and proposes a focused wait/race fix or Cypress-to-Playwright
-migration.
+**Adoption metrics:** Migration PRs rehearsed, contract failures found, repair
+time, and deployment incidents avoided.
 
-### 6. Semantic Accessibility Regression Responder — 9.0
+**Demo seed:** Add a migration with a valid head and broken downgrade object
+reference.
 
-**Problem:** Icon-only controls and visually labeled inputs can lack accessible
-names or programmatic label associations even while JSX lint passes and visual
-behavior looks correct.
+**Why Devin:** Devin maps the database failure across migrations, helpers, and
+tests into a minimal repair.
 
-**Event trigger:** PRs changing React/UI components or tests; manual seed event
-for the Dataset List flow.
+**Why demoted:** The design remains technically strong and deterministic, but
+it helps only engineers changing migrations. It demonstrates capability better
+than organization-wide adoption.
 
-**Workflow:** A deterministic preflight on React/UI diffs selects candidates such
-as icon-only actions, unbound labels, or new `getByTestId`-only test patterns.
-Devin receives the component, existing tests, and expected role/name semantics,
-then runs focused React Testing Library queries without modifying the target
-branch. Only a reproduced semantic failure creates an issue. Remediation makes
-the minimal `aria-label` or label-association fix and focused test update.
+## Ideas retained for later expansion
 
-**Observable outputs:** GitHub Check summary, confirmed issue with role/name
-query and expected accessible name, focused reproduction command, and linked
-remediation PR with passing test evidence.
+- **Semantic OpenAPI breaking-change sentinel:** strong contract protection,
+  but limited to API/schema changes.
+- **Coordinated npm compatibility canary:** useful for dependency upgrades, but
+  expensive and narrower than general failed-check rescue.
+- **Semantic accessibility regression responder:** valuable and user-centered,
+  but not the repository's most visible delivery bottleneck.
+- **Principal-aware authorization reproducer:** technically deep but requires
+  stricter private handling and is a poor first trust-building automation.
 
-**Leadership metrics:** Confirmation rate, false-positive rate, semantic-rule
-counts, median event-to-confirmation, median event-to-PR, remediation pass/merge
-rate, accessible-query coverage trend, and ACU per confirmed issue.
+## Ideas rejected
 
-**Demo seed:** Use Dataset List gaps such as an icon-only import action lacking
-accessible text or a search input lacking explicit label association.
-
-**Why Devin:** Devin converts syntactic candidates into user-semantic evidence
-and minimal fixes while role/name queries remain deterministic.
-
-### 7. Coordinated npm Compatibility Canary — 9.0
-
-**Problem:** Superset's frontend has many direct/dev dependencies, overrides,
-multiple npm roots, and compatibility-sensitive families. A dependency PR can
-have a valid lockfile but still break build/runtime compatibility across roots.
-
-**Event trigger:** PRs for allowlisted npm dependency updates; check failures
-from npm dependency tree, frontend typecheck/test/build, websocket, or embedded
-SDK checks.
-
-**Workflow:** An allowlisted npm dependency PR creates one diagnostic Devin
-session per affected npm root. Sessions run the smallest relevant install,
-dependency-tree, typecheck, test, or build command. A coordinator aggregates
-structured findings and starts exactly one resolver session only when diagnostics
-agree on a bounded compatibility change.
-
-**Observable outputs:** GitHub Check matrix by package root and command,
-evidence-rich blocked-upgrade issue, and one resolver-owned remediation PR
-changing dependency, lockfile, adapter, config, and focused tests as needed.
-
-**Leadership metrics:** Dependency PR pass rate, compatibility failures by
-package family/root, parallel session duration, ACU use, median
-classification/fix time, ignored-upgrade backlog age, first-fix success, and
-repeat-revert count.
-
-**Demo seed:** Upgrade `simple-zstd` from 1.4.2 to 2.1.0 and reproduce the known
-synchronous-to-asynchronous API incompatibility before deciding to re-pin or add
-a bounded adapter.
-
-**Why Devin:** Devin coordinates cross-root diagnostics and chooses a
-compatibility strategy; deterministic builds and tests decide pass/fail.
-
-## Rejected or merged concepts
-
-- **Async task and realtime principal-isolation gate:** important but too broad
-  for the first implementation because it requires full Compose,
-  Redis/WebSocket/task identity matrices, and careful vulnerability handling.
-- **Direct-dependency provenance and remediation broker:** valuable, but the
-  vulnerability/SCA framing risks premature claims; Python Pin Drift has cleaner
-  deterministic signals.
-- **Dependency Policy Drift Sentinel:** mostly static inventory, with Devin
-  acting too much like a summarizer.
-- **Failed-check fingerprint router and repair coordinator:** useful but generic
-  compared with migration rehearsal or retry-hidden flake accounting.
-- **Quarantine exit manager:** probabilistic repeated-run proof and stale
-  maintainer intent weaken the demo.
-- **Alembic Graph and Docker Rehearsal Gate:** merged into Migration Upgrade
-  Contract Guardian.
-- **REST Schema and Documentation Consistency Auditor:** merged conceptually into
-  the OpenAPI breaking-change sentinel.
-- **Bounded TypeScript and deprecated-pattern debt queue:** actionable, but more
-  like backlog generation than an evidence-driven repair loop.
-- **Bundle regression investigator:** promising later extension, but less
-  deterministic for a compact take-home implementation.
-- **Release Candidate Readiness Gate / Feature-Flag Lifecycle Governor:** broad
-  governance checks with weaker five-minute proof.
-- **Generic LLM reviewer:** rejected because it lacks a deterministic oracle and
-  has high false-positive risk.
-- **Public security issue filing from static patterns:** rejected because Superset
-  findings require runtime proof and private handling for undisclosed issues.
+- **Generic LLM review on every pull request:** noisy, difficult to verify, and
+  likely to reduce trust.
+- **Automatic stale-PR closing:** optimizes queue size rather than engineering
+  outcomes and can alienate contributors.
+- **Automatic rerun of every failed job:** hides flakes and spends CI without
+  producing understanding.
+- **Static dashboard of CI failures:** useful reporting, but Devin is not a core
+  primitive and engineers must visit another surface.
+- **Public security issue filing from patterns:** conflicts with Superset's
+  evidence and private-disclosure requirements.

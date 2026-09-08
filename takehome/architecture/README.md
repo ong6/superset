@@ -48,10 +48,17 @@ The map intentionally stays at the system level. It highlights:
 - Redis-style broker and Pub/Sub behavior;
 - Celery workers and Celery beat;
 - the optional WebSocket service for realtime task updates;
-- why Alembic migration rehearsal is a strong automation target.
+- representative failure surfaces, including Alembic migration correctness.
 
 Guided views focus the audience on the interactive query path, metadata and
 caching, asynchronous execution, and realtime status updates.
+
+The diagram was produced during codebase discovery, before the automation ideas
+were re-ranked for engineering-team adoption. Its migration callout should be
+read as one technically strong specialized use case. The selected first
+automation is the PR CI Rescue Autopilot described in the parent take-home
+documents, which operates outside the product runtime and can later route
+migration failures into a dedicated rehearsal.
 
 ## Generation procedure
 
