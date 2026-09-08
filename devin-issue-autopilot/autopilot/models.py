@@ -17,8 +17,9 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Issue(BaseModel):
@@ -26,6 +27,7 @@ class Issue(BaseModel):
     title: str
     body: str
     label_at: str
+    label_actor: str = ""
 
     def section(self, name: str) -> str:
         match = re.search(rf"(?ms)^## {re.escape(name)}\s*\n(.*?)(?=^## |\Z)", self.body)
@@ -45,17 +47,23 @@ class Issue(BaseModel):
         return match.group(1).strip() if match else "Python-Unit"
 
     @property
+    def acceptance_command(self) -> str:
+        return self.section("Acceptance command")
+
+    @property
     def key(self) -> str:
         return f"{self.number}:{self.label_at}"
 
 
 class StructuredResult(BaseModel):
-    outcome: str
-    pr_url: str
-    branch: str
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["fixed", "no_change", "blocked"]
+    pr_url: str = Field(max_length=500)
+    branch: str = Field(max_length=300)
     root_cause: str = Field(max_length=400)
     acceptance_output: str = Field(max_length=2000)
-    files_changed: list[str]
+    files_changed: list[str] = Field(max_length=20)
 
 
 class SessionCreate(BaseModel):
@@ -78,6 +86,14 @@ class SessionSnapshot(BaseModel):
 class PullRequest(BaseModel):
     state: str
     head_sha: str
+    head_ref: str
+    base_sha: str
+    base_ref: str
+
+
+class Target(BaseModel):
+    branch: str
+    sha: str
 
 
 class Run(BaseModel):
@@ -96,11 +112,14 @@ class Run(BaseModel):
     issue_title: str
     issue_body: str
     label_at: str
+    label_actor: str = ""
     outcome: str | None = None
     ci: str | None = None
     comment_id: str | None = None
     verification_started: float | None = None
     pr_opened: float | None = None
+    target_branch: str | None = None
+    target_sha: str | None = None
 
     @property
     def issue_model(self) -> Issue:
@@ -109,6 +128,7 @@ class Run(BaseModel):
             title=self.issue_title,
             body=self.issue_body,
             label_at=self.label_at,
+            label_actor=self.label_actor,
         )
 
 
@@ -120,6 +140,13 @@ class Settings:
     github_repo: str = "ong6/superset"
     db_path: Path = Path("autopilot.db")
     daily_acu_cap: float = 20
+    allowed_checks: tuple[str, ...] = ("Python-Unit", "Check OpenAPI spec drift")
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.github_repo) is None:
+            raise ValueError("GITHUB_REPO must be an owner/repository name")
+        if not self.allowed_checks:
+            raise ValueError("At least one allowed CI check is required")
 
     @classmethod
     def from_env(cls, fake: bool = False) -> "Settings":
@@ -134,6 +161,14 @@ class Settings:
             github_repo=os.getenv("GITHUB_REPO", "ong6/superset"),
             db_path=Path(os.getenv("AUTOPILOT_DB", "autopilot.db")),
             daily_acu_cap=float(os.getenv("AUTOPILOT_DAILY_ACU_CAP", "20")),
+            allowed_checks=tuple(
+                check.strip()
+                for check in os.getenv(
+                    "AUTOPILOT_ALLOWED_CHECKS",
+                    "Python-Unit,Check OpenAPI spec drift",
+                ).split(",")
+                if check.strip()
+            ),
         )
 
 
@@ -143,11 +178,15 @@ def output_schema() -> dict[str, object]:
         "additionalProperties": False,
         "properties": {
             "outcome": {"type": "string", "enum": ["fixed", "no_change", "blocked"]},
-            "pr_url": {"type": "string"},
-            "branch": {"type": "string"},
+            "pr_url": {"type": "string", "maxLength": 500},
+            "branch": {"type": "string", "maxLength": 300},
             "root_cause": {"type": "string", "maxLength": 400},
             "acceptance_output": {"type": "string", "maxLength": 2000},
-            "files_changed": {"type": "array", "items": {"type": "string"}},
+            "files_changed": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {"type": "string", "maxLength": 500},
+            },
         },
         "required": [
             "outcome",

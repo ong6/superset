@@ -35,6 +35,9 @@ GitHub issue + devin-fix
   poller / idempotency ----> SQLite runs + transitions
           |
           v
+  pinned default-branch SHA + issue URL
+          |
+          v
   Devin API v3 session ----> one nudge / ACU + time limits
           |
           v
@@ -94,8 +97,14 @@ Acceptance command
 ```
 
 Add `CI check: <name>` under Expected when verification should wait for a check
-other than `Python-Unit`. Apply `devin-fix` to start. Repeated polls reuse the
-same label-event key; applying `devin-retry` creates a new key.
+other than `Python-Unit`. Checks must be present in
+`AUTOPILOT_ALLOWED_CHECKS`. The acceptance section must contain one command
+without shell operators and begin with an allowed tool.
+
+Apply `devin-fix` to start. Repeated polls reuse the same label-event key;
+applying `devin-retry` creates a new key. The spawned session receives the
+canonical GitHub issue URL, the full issue contract as untrusted data, and the
+default branch pinned to an immutable SHA.
 
 The controller identifies each issue by its canonical GitHub URL, built from the
 configured repository and the issue number:
@@ -123,12 +132,17 @@ configured repository and the issue number:
 |---|---|
 | Daily ACU cap | Refuses new sessions at 20 ACUs by default |
 | Wall clock | Deletes a session after 40 minutes, then polls for 2 minutes |
+| Label authorization | Requires the actor who applied the trigger label to have write access |
+| Contract validation | Rejects oversized issues, unsafe paths or commands, and unapproved checks before session creation |
+| Immutable target | Pins the default branch SHA and rejects a PR if the branch or PR base moved |
 | Allowed paths | Fetches the PR file list and rejects every out-of-policy path |
+| Structured output | Cross-checks the reported PR URL and claimed paths before verification |
 | One nudge | Sends one bounded message for `waiting_for_user` |
 | No secrets | Devin receives `secret_ids: []`; tokens stay in the controller |
-| CI verification | Requires an open PR and successful named check on its head SHA |
-| Restart safety | Persists `session_id` before polling and never recreates it |
+| CI verification | Requires an open PR and successful named check run or commit status on its head SHA |
+| Restart safety | Claims `new → creating` atomically, persists `session_id` before polling, and never blindly recreates it |
 | Idempotent output | Stores the GitHub comment ID and posts once |
+| Label reconciliation | Removes trigger and conflicting terminal labels before applying the outcome |
 
 ## State
 

@@ -32,8 +32,10 @@ class Store:
               session_id TEXT, session_url TEXT, state TEXT NOT NULL, pr_url TEXT,
               head_sha TEXT, acus REAL NOT NULL DEFAULT 0, nudges INTEGER NOT NULL DEFAULT 0,
               created REAL NOT NULL, updated REAL NOT NULL, issue_title TEXT NOT NULL,
-              issue_body TEXT NOT NULL, label_at TEXT NOT NULL, outcome TEXT, ci TEXT,
-              comment_id TEXT, verification_started REAL, pr_opened REAL
+              issue_body TEXT NOT NULL, label_at TEXT NOT NULL, label_actor TEXT NOT NULL DEFAULT '',
+              outcome TEXT, ci TEXT,
+              comment_id TEXT, verification_started REAL, pr_opened REAL,
+              target_branch TEXT, target_sha TEXT
             );
             CREATE TABLE IF NOT EXISTS transitions (
               run_id TEXT NOT NULL, "from" TEXT, "to" TEXT NOT NULL,
@@ -41,6 +43,15 @@ class Store:
             );
             """
         )
+        columns = {
+            row["name"] for row in self.connection.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        for name in ("target_branch", "target_sha", "label_actor"):
+            if name not in columns:
+                self.connection.execute(
+                    f"ALTER TABLE runs ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"
+                )
+        self.connection.commit()
 
     def claim(self, issue: Issue, now: float | None = None) -> Run:
         at = now or time.time()
@@ -48,8 +59,9 @@ class Store:
         inserted = self.connection.execute(
             """
             INSERT OR IGNORE INTO runs
-              (run_id, issue, key, state, created, updated, issue_title, issue_body, label_at)
-            VALUES (?, ?, ?, 'new', ?, ?, ?, ?, ?)
+              (run_id, issue, key, state, created, updated, issue_title, issue_body,
+               label_at, label_actor)
+            VALUES (?, ?, ?, 'new', ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -60,6 +72,7 @@ class Store:
                 issue.title,
                 issue.body,
                 issue.label_at,
+                issue.label_actor,
             ),
         )
         if inserted.rowcount:
@@ -76,6 +89,24 @@ class Store:
         if row is None:
             raise KeyError(run_id)
         return Run.model_validate(dict(row))
+
+    def begin_start(self, run: Run, now: float | None = None) -> tuple[Run, bool]:
+        at = now or time.time()
+        updated = self.connection.execute(
+            """
+            UPDATE runs
+            SET state = 'creating', updated = ?
+            WHERE run_id = ? AND state = 'new'
+            """,
+            (at, run.run_id),
+        )
+        if updated.rowcount:
+            self.connection.execute(
+                'INSERT INTO transitions VALUES (?, "new", "creating", ?, "")',
+                (run.run_id, at),
+            )
+        self.connection.commit()
+        return self.get(run.run_id), bool(updated.rowcount)
 
     def update(self, run_id: str, **values: object) -> Run:
         if not values:
@@ -118,12 +149,18 @@ class Store:
             "policy_rejected",
             "no_pr",
             "blocked",
+            "no_change",
             "timed_out",
+            "stale_sha",
             "devin_error",
         )
         placeholders = ",".join("?" for _ in terminal)
         rows = self.connection.execute(
-            f"SELECT * FROM runs WHERE state NOT IN ({placeholders})", terminal
+            f"""
+            SELECT * FROM runs
+            WHERE state NOT IN ({placeholders}) OR comment_id IS NULL
+            """,
+            terminal,
         ).fetchall()
         return [Run.model_validate(dict(row)) for row in rows]
 
