@@ -19,7 +19,16 @@ under the License.
 
 # Recommendation and Next Steps
 
-## Selected build: GitHub Issue Remediation Runner
+## Document role
+
+The product decision remains GitHub issue remediation. The working take-home
+is the standalone polling controller in
+[`devin-issue-autopilot/`](../devin-issue-autopilot/README.md), triggered by
+`devin-fix`. This document describes the stronger production-hardening target;
+references to Actions, immutable preflight, patch-only Devin access, a clean
+verifier, and a controlled writer are not claims about the current slice.
+
+## Selected product: GitHub Issue Remediation Runner
 
 Build a maintainer-authorized GitHub automation that turns one repository issue
 into one deterministic reproduction, one bounded Devin patch proposal, one
@@ -37,7 +46,9 @@ take-home goal directly:
 - clean-room acceptance and repository CI provide deterministic proof; and
 - status, failure, and success remain visible in GitHub.
 
-The complete technical plan is in
+The implemented reviewer path is in
+[Devin Issue Autopilot](../devin-issue-autopilot/README.md). The complete
+hardening plan is in
 [GitHub Issue Remediation Automation](09-github-issue-remediation-implementation.md).
 
 ## Problem statement
@@ -66,7 +77,7 @@ The first version supports:
 - one configured repository;
 - one open issue;
 - one strict, machine-readable issue contract;
-- one `devin:fix` authorization label;
+- one `devin-fix` authorization label;
 - one active remediation generation;
 - one configured Devin playbook;
 - one pinned target SHA and clean preflight;
@@ -79,12 +90,13 @@ It does not run on every public issue, write to the default branch, merge,
 approve, bypass protection, pass publisher credentials to Devin, or claim
 success from session status alone.
 
-## Architecture decision
+## Production-hardening architecture decision
 
-Use **GitHub Actions dispatcher plus scheduled reconciler** for the pilot.
+Use **GitHub Actions dispatcher plus scheduled reconciler** for the hardened
+pilot.
 
 ```text
-issues.labeled(`devin:fix`)
+issues.labeled(`devin-fix`)
   -> validate contract, authorize, pin SHA, and reproduce
   -> claim
   -> create Devin session
@@ -108,14 +120,20 @@ Use a small Python package for orchestration rather than embedding state
 decisions in shell and YAML. The same package runs with fake adapters in Docker
 for deterministic replay.
 
-## Why not start with a standalone controller
+## Why the take-home starts with a standalone controller
 
 A GitHub App, database, queue, and workers are the correct production shape
 when the system spans many repositories or requires immediate callbacks and
 centralized analytics. They are not prerequisites for proving one
 issue-to-remediation loop.
 
-The Actions-native pilot still has explicit:
+The implemented controller uses 30-second issue polling, SQLite state,
+bounded Devin sessions, PR path policy, named CI verification, issue comments
+and labels, and a durable report. It is intentionally deploy-free and can be
+replayed without credentials.
+
+The next hardening step can move orchestration into an Actions dispatcher and
+scheduled reconciler with:
 
 - per-issue concurrency;
 - durable state in one versioned issue comment;
@@ -128,7 +146,7 @@ The Actions-native pilot still has explicit:
 
 ## Trigger and authorization
 
-Trigger only when a maintainer applies `devin:fix`. Do not automatically send
+Trigger only when a maintainer applies `devin-fix`. Do not automatically send
 all newly opened public issues to Devin.
 
 The dispatcher validates:
@@ -409,7 +427,7 @@ Use one honest Superset issue with:
 
 Demo:
 
-1. apply `devin:fix`;
+1. apply `devin-fix`;
 2. show queued and running status;
 3. show exactly one linked session;
 4. show the structured patch and clean verifier pass;

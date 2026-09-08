@@ -22,7 +22,10 @@ under the License.
 ## Document role
 
 The selected first implementation is the
-[GitHub Issue Remediation Runner](09-github-issue-remediation-implementation.md).
+[`devin-issue-autopilot`](../devin-issue-autopilot/README.md) GitHub Issue
+Remediation Runner. Its
+[production-hardening design](09-github-issue-remediation-implementation.md)
+defines the platform boundary this future trigger can reuse.
 This design is retained as a hardened future adapter for automatic
 pull-request CI repair. It preserves the stronger delivery, attempt,
 failure-claim, isolated-source, lost-response, and publishing contracts added

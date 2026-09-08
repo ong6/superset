@@ -22,7 +22,10 @@ under the License.
 ## 1. Document role
 
 The selected first implementation is the
-[GitHub Issue Remediation Runner](09-github-issue-remediation-implementation.md).
+[`devin-issue-autopilot`](../devin-issue-autopilot/README.md) GitHub Issue
+Remediation Runner. Its
+[production-hardening design](09-github-issue-remediation-implementation.md)
+defines the platform boundary this future trigger can reuse.
 This specification is retained as the preferred second trigger after the
 issue-to-PR loop proves session management, status, policy, independent
 verification, and observability.

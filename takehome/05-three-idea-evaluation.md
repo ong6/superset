@@ -24,7 +24,9 @@ under the License.
 This document preserves the evidence-led comparison of three pull-request and
 release automations. It does not override the original issue-to-remediation
 deliverable. The selected first implementation is the
-[GitHub Issue Remediation Runner](09-github-issue-remediation-implementation.md).
+[`devin-issue-autopilot`](../devin-issue-autopilot/README.md) GitHub Issue
+Remediation Runner; its stronger production design is documented
+[separately](09-github-issue-remediation-implementation.md).
 
 Within this three-option comparison, the Failing Check Repair Tool scores
 **9.1/10**, ahead of the Rebase Conflict Resolver at **8.8** and the Release

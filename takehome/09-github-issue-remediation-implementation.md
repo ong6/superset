@@ -17,15 +17,33 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# GitHub Issue Remediation Automation
+# Production Hardening Design: GitHub Issue Remediation Automation
 
-## 1. Decision
+## 1. Status and decision
 
-Build a working **GitHub Issue Remediation Runner** whose first production
+The repository already contains a working take-home slice:
+
+```text
+issue receives `devin-fix`
+  -> a long-running controller polls and claims the label event in SQLite
+  -> one bounded Devin API v3 session uses `superset-issue-fix`
+  -> Devin opens one pull request
+  -> the controller validates changed paths and the named CI check
+  -> the issue receives one outcome comment and label
+```
+
+Its source of truth is
+[`devin-issue-autopilot/README.md`](../devin-issue-autopilot/README.md).
+This document specifies the production hardening beyond that reviewer slice.
+It is intentionally stronger and is not a description of code already present:
+event dispatch replaces polling, Devin returns a patch without publisher
+access, and a clean verifier plus controlled writer owns publication.
+
+Build a hardened **GitHub Issue Remediation Runner** whose production
 surface is a maintainer-authorized GitHub issue:
 
 ```text
-issue receives `devin:fix`
+issue receives `devin-fix`
   -> GitHub Actions validates the issue contract and pins the target SHA
   -> a clean preflight reproduces the issue before one bounded Devin session
   -> Devin investigates and returns a structured patch proposal
@@ -35,20 +53,20 @@ issue receives `devin:fix`
   -> one issue comment and one status label show the lifecycle and outcome
 ```
 
-This returns the take-home to its original requirement: one successful
+This hardens the take-home's original requirement: one successful
 **issue-to-remediation** path in the Superset fork. Failed-check repair remains
 a valuable later trigger, but it is not the first product.
 
-For the pilot, use GitHub Actions as the event and orchestration surface rather
-than deploying a long-running webhook service. Put the orchestration logic in a
-small tested Python package that runs in Actions and in Docker locally. Store
-the durable user-facing state in GitHub, with the Devin session and pull
-request as linked execution records.
+For the hardened pilot, use GitHub Actions as the event and orchestration
+surface rather than deploying a long-running webhook service. Put the
+orchestration logic in a small tested Python package that runs in Actions and
+in Docker locally. Store the durable user-facing state in GitHub, with the
+Devin session and pull request as linked execution records.
 
-The implementation has four entry workflows plus one internal reusable
+The target architecture has four entry workflows plus one internal reusable
 per-issue reconciliation worker:
 
-1. **dispatch** on the `devin:fix` label;
+1. **dispatch** on the `devin-fix` label;
 2. **reconcile** on a five-minute schedule and manual dispatch;
 3. **cancel** when the issue closes or authorization is removed; and
 4. **report** on a schedule or manual dispatch to aggregate pilot outcomes.
@@ -67,7 +85,7 @@ analytics justify another service.
 
 - one open issue in `ong6/superset`;
 - one valid `issue-remediation/v1` contract in that issue;
-- one maintainer-applied `devin:fix` label;
+- one maintainer-applied `devin-fix` label;
 - one issue generation at a time;
 - one configured Devin playbook and repository;
 - one immutable target SHA;
@@ -184,7 +202,7 @@ on:
 It proceeds only when:
 
 - the issue is open;
-- the added label is exactly `devin:fix`;
+- the added label is exactly `devin-fix`;
 - the repository ID matches configuration;
 - the issue is not a pull request;
 - the issue contains exactly one valid `issue-remediation/v1` contract;
@@ -198,7 +216,7 @@ resolve the actor's effective permission through the GitHub API and record it.
 
 Do not trigger on every `issues.opened` event. Public issue titles and bodies
 are untrusted and can be noisy, incomplete, malicious, or too broad. After the
-pilot, a trusted issue form or triage rule may apply `devin:fix`
+pilot, a trusted issue form or triage rule may apply `devin-fix`
 automatically.
 
 The machine-readable contract is data, not executable text:
@@ -469,7 +487,7 @@ the push and persists it before monitoring CI.
 
 ### 4.7 Cancellation
 
-Closing the issue, removing `devin:fix`, or applying `devin:cancel` revokes
+Closing the issue, removing `devin-fix`, or applying `devin-cancel` revokes
 authorization.
 
 The cancellation workflow:
@@ -654,8 +672,8 @@ production controller.
 ### Control labels
 
 ```text
-devin:fix
-devin:cancel
+devin-fix
+devin-cancel
 ```
 
 ### Mutually exclusive status labels
@@ -993,7 +1011,7 @@ jobs:
   dispatch:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'devin:fix'
+      github.event.label.name == 'devin-fix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@<full-commit-sha>
@@ -1212,7 +1230,7 @@ Create one honest, narrowly scoped Superset issue with:
 
 The showcase succeeds only when:
 
-1. a maintainer applies `devin:fix`;
+1. a maintainer applies `devin-fix`;
 2. the issue immediately shows queued/running status;
 3. exactly one Devin session appears;
 4. Devin returns one structured patch without repository writes;
@@ -1272,7 +1290,7 @@ remain the visible manual trigger and emergency fallback.
 
 ## 15. Definition of done
 
-- A real GitHub issue can trigger the automation through `devin:fix`.
+- A real GitHub issue can trigger the automation through `devin-fix`.
 - The workflow uses the Devin API rather than a manually started session.
 - Duplicate event delivery creates one session.
 - A strict issue contract and clean preflight pass before session creation.

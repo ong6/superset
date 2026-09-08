@@ -69,6 +69,16 @@ make test
 Simulation runs the three fixtures through fake Devin and GitHub adapters. Tests
 never use the network.
 
+## Reviewer walkthrough
+
+Copy one body from [`issues/`](issues/) into a new `ong6/superset` issue; the
+corresponding regressions are intentionally present on `master`. Configure
+`.env`, run `docker compose up --build` in one terminal, then apply
+`devin-fix`. Follow the session and PR links in the issue outcome, and run
+`make report` from another terminal. The
+[take-home index](../takehome/README.md) separates this implemented path from
+the production-hardening and future CI-rescue designs.
+
 ## Issue contract
 
 Issues are Markdown with these sections:
