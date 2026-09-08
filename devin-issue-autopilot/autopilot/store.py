@@ -35,7 +35,8 @@ class Store:
               issue_body TEXT NOT NULL, label_at TEXT NOT NULL, label_actor TEXT NOT NULL DEFAULT '',
               outcome TEXT, ci TEXT,
               comment_id TEXT, verification_started REAL, pr_opened REAL,
-              target_branch TEXT, target_sha TEXT
+              target_branch TEXT, target_sha TEXT,
+              summary TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS transitions (
               run_id TEXT NOT NULL, "from" TEXT, "to" TEXT NOT NULL,
@@ -46,7 +47,7 @@ class Store:
         columns = {
             row["name"] for row in self.connection.execute("PRAGMA table_info(runs)").fetchall()
         }
-        for name in ("target_branch", "target_sha", "label_actor"):
+        for name in ("target_branch", "target_sha", "label_actor", "summary"):
             if name not in columns:
                 self.connection.execute(
                     f"ALTER TABLE runs ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"
@@ -153,6 +154,9 @@ class Store:
             "timed_out",
             "stale_sha",
             "devin_error",
+            "no_change",
+            "triaged",
+            "triage_failed",
         )
         placeholders = ",".join("?" for _ in terminal)
         rows = self.connection.execute(

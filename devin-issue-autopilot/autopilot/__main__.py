@@ -51,11 +51,31 @@ def watch() -> None:
 
 
 @app.command()
-def once(issue: int = typer.Option(..., "--issue")) -> None:
+def once(
+    issue: int = typer.Option(..., "--issue"),
+    actor: str | None = typer.Option(None, "--actor"),
+    requested_at: str | None = typer.Option(None, "--requested-at"),
+    purpose: str = typer.Option("fix", "--purpose"),
+) -> None:
+    if purpose not in {"fix", "retry"}:
+        raise typer.BadParameter("must be fix or retry", param_hint="--purpose")
     engine = real_engine()
-    result = engine.run_issue(engine.github.get_issue(issue))
+    result = engine.run_issue(engine.github.get_issue(issue, actor, requested_at, purpose))
     typer.echo(f"{result.issue}: {result.state}")
     if result.state != "verified":
+        raise typer.Exit(1)
+
+
+@app.command()
+def triage(
+    issue: int = typer.Option(..., "--issue"),
+    actor: str | None = typer.Option(None, "--actor"),
+    requested_at: str | None = typer.Option(None, "--requested-at"),
+) -> None:
+    engine = real_engine()
+    result = engine.run_triage_issue(engine.github.get_triage_issue(issue, actor, requested_at))
+    typer.echo(f"{result.issue}: {result.state}")
+    if result.state != "triaged":
         raise typer.Exit(1)
 
 
