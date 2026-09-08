@@ -19,10 +19,20 @@ under the License.
 
 # Goal and Success Criteria
 
+## Document role
+
+This document describes the product ambition and production success criteria.
+The working reviewer slice is the polling controller documented in
+[`devin-issue-autopilot/README.md`](../devin-issue-autopilot/README.md).
+Where this document describes GitHub Actions, immutable preflight, a
+patch-only Devin session, or a controlled publisher, it is defining the
+hardening path rather than claiming those controls are already implemented.
+
 ## Objective
 
-Build and present a working, event-driven automation that uses GitHub Actions
-and the Devin API to remediate a concrete GitHub issue in this Superset fork.
+Build and present a working automation that uses a maintainer-authorized
+GitHub issue and the Devin API to remediate a concrete issue in this Superset
+fork.
 
 The core proof is:
 
@@ -48,8 +58,10 @@ The result should demonstrate:
 4. **Customer value:** an issue moves from reported problem to a reviewable,
    independently verified code change without leaving GitHub.
 
-The [implementation document](09-github-issue-remediation-implementation.md)
-is the authoritative technical design.
+The [take-home index](README.md) is authoritative for the implemented reviewer
+path. The
+[production design](09-github-issue-remediation-implementation.md) defines the
+intended hardening beyond that slice.
 
 ## Why the trigger is an authorized issue
 
@@ -64,14 +76,14 @@ issue-to-remediation path. An issue is also a strong workflow boundary:
   lifecycle.
 
 The automation does not run on every public issue. A maintainer applies
-`devin:fix` after confirming that the issue is scoped and appropriate for
+`devin-fix` after confirming that the issue is scoped and appropriate for
 automation. A trusted issue form or triage rule may apply the label
 automatically after the pilot earns trust.
 
-## Required system loop
+## Production target loop
 
 ```text
-issues.labeled(`devin:fix`)
+issues.labeled(`devin-fix`)
   -> dispatcher validates contract, repository, issue, actor, and kill switch
   -> dispatcher pins the target SHA and reproduces the issue cleanly
   -> dispatcher serializes and claims one issue generation
@@ -92,7 +104,7 @@ status rendering, and recovery. Devin owns repository-scale investigation and
 the bounded patch proposal. The controller and GitHub CI own the success
 oracle.
 
-## Deliverables
+## Production target deliverables
 
 ### Working project
 
@@ -119,7 +131,7 @@ oracle.
 
 - **Problem:** an accepted issue still requires investigation, implementation,
   test selection, and a reviewable pull request.
-- **Event:** a maintainer adds `devin:fix`.
+- **Event:** a maintainer adds `devin-fix`.
 - **Devin work:** investigate the issue and return the smallest scoped patch
   proposal with structured evidence.
 - **Proof:** a clean verifier passes before publication, then normal GitHub CI
@@ -187,9 +199,9 @@ The pilot report must answer:
 | Demo clarity | One visible issue-to-green-PR path and one non-success path |
 | Adoption | Maintainers can use it without leaving GitHub |
 
-## Definition of done
+## Production target definition of done
 
-- A maintainer can apply `devin:fix` to a real issue.
+- A maintainer can apply `devin-fix` to a real issue.
 - The strict issue contract validates and a clean preflight reproduces it.
 - Exactly one Devin session is created for one issue generation.
 - The issue displays queued or active status within two minutes.

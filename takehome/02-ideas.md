@@ -37,6 +37,12 @@ Earlier failed-check, rebase, release, flaky-test, and migration ideas remain
 valuable future triggers for the same session, policy, verification, and
 observability platform.
 
+The working take-home implements this direction as the polling
+[`devin-issue-autopilot`](../devin-issue-autopilot/README.md) controller using
+the `devin-fix` label. The Actions dispatcher, immutable preflight,
+patch-only session, clean verifier, and controlled writer below are the
+production-hardening target, not the current reviewer path.
+
 ## Revised evaluation method
 
 | Dimension | Weight |
@@ -71,7 +77,7 @@ independent oracle.
 
 Build the **GitHub Issue Remediation Runner** with:
 
-- `issues.labeled` and `devin:fix` as the first authorization event;
+- `issues.labeled` and `devin-fix` as the first authorization event;
 - a strict issue contract, immutable target SHA, and deterministic preflight;
 - a GitHub Actions dispatcher that validates, claims, and creates one
   read-only Devin session;
@@ -84,8 +90,10 @@ Build the **GitHub Issue Remediation Runner** with:
 
 The [detailed recommendation](04-recommendation.md) defines the selected
 product boundary and rollout. The
-[implementation design](09-github-issue-remediation-implementation.md) defines
-the exact architecture, API lifecycle, workflows, idempotency, security,
+[working controller](../devin-issue-autopilot/README.md) defines the reviewer
+path, while the
+[production design](09-github-issue-remediation-implementation.md) defines the
+hardening architecture, API lifecycle, workflows, idempotency, security,
 status, failure taxonomy, observability, and tests.
 
 ## Prior discovery inventory

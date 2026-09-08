@@ -263,14 +263,20 @@ configured GitHub checks to pass before declaring an issue remediated.
 
 ## Where an automation should integrate
 
-The take-home controller should remain outside Superset and interact through
-GitHub events, the GitHub API, the Devin API, Dockerized checks, and repository
-commands. That keeps the proof reusable and avoids adding take-home-specific
-runtime code to the product.
+The take-home controller should remain outside the Superset product runtime.
+It lives in this fork under
+[`devin-issue-autopilot/`](../devin-issue-autopilot/README.md) and interacts
+through the GitHub API, the Devin API, Docker, and repository checks. This
+keeps the proof reusable without adding take-home-specific behavior to the
+Flask or React applications.
 
-For the selected GitHub Issue Remediation Runner:
+The implemented slice polls for `devin-fix`, lets the bounded Devin session
+open the remediation PR, then independently checks changed paths and the
+issue-selected CI check. The stronger production boundary is:
 
-- trigger when a maintainer applies `devin:fix` to an open issue;
+For the hardened GitHub Issue Remediation Runner:
+
+- trigger when a maintainer applies `devin-fix` to an open issue;
 - validate a strict issue contract, resolve a full target SHA, and reproduce
   the issue through a controller-owned command policy;
 - serialize and deduplicate one active remediation generation per issue;

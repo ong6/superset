@@ -19,53 +19,62 @@ under the License.
 
 # Devin Event-Driven Automation Take-Home
 
-This directory captures the discovery and design work for an event-driven
-automation built around the Devin API and this Superset fork.
+This directory captures the discovery, implemented reviewer slice, and
+production-hardening design for an issue-remediation automation built around
+the Devin API and this Superset fork.
+
+## Working implementation
+
+The current take-home is the polling controller in
+[Devin Issue Autopilot](../devin-issue-autopilot/README.md):
+
+```text
+maintainer applies `devin-fix`
+  -> controller claims the issue event in SQLite
+  -> one bounded Devin API v3 session uses `superset-issue-fix`
+  -> Devin opens one scoped pull request
+  -> controller checks the PR paths and named CI check
+  -> controller comments, relabels the issue, and records the report
+```
+
+This is the authoritative reviewer path. It is deliberately smaller than the
+production-hardening design: there are no GitHub Actions workflows, webhook,
+queue, controlled publisher, immutable target-SHA preflight, or clean-room
+patch sandbox in the implemented slice.
+
+The three issue fixtures are in
+[`devin-issue-autopilot/issues/`](../devin-issue-autopilot/issues/), and the
+bounded repair procedure is
+[`superset-issue-fix`](../.devin/skills/superset-issue-fix/SKILL.md).
 
 ## Documents
 
-1. [Goal and success criteria](01-goal.md)
+1. [Product goal and production success criteria](01-goal.md)
 2. [Evaluated automation ideas](02-ideas.md)
 3. [Superset codebase overview](03-codebase-overview.md)
 4. [Architecture map](architecture/README.md)
-5. [Recommendation and next steps](04-recommendation.md)
+5. [Production-hardening recommendation](04-recommendation.md)
 6. [Prior candidate comparison](05-three-idea-evaluation.md)
 7. [Future CI-rescue technical specification](06-failing-check-repair-technical-spec.md)
 8. [Future CI-rescue test cases](07-ready-for-review-ci-cases.md)
 9. [Future CI-rescue implementation design](08-product-implementation-design.md)
-10. [GitHub issue remediation implementation](09-github-issue-remediation-implementation.md)
+10. [Issue-remediation production design](09-github-issue-remediation-implementation.md)
 
-## Recommended direction
+## Direction
 
-Build the **GitHub Issue Remediation Runner**: a maintainer-authorized GitHub
-Action that turns a strict repository issue contract into one bounded Devin
-patch proposal, one independently verified pull request, and one observable
-status record on the issue.
+The product direction is **GitHub Issue Remediation**. The working take-home
+proves that a maintainer can authorize a narrowly scoped issue and receive one
+bounded Devin session, one pull request, independent CI verification, and an
+observable outcome.
 
-This is the authoritative take-home direction:
+The design documents describe how to harden that proof:
 
-- a maintainer applies `devin:fix` to an open issue;
-- a dispatcher validates the contract, pins the target SHA, reproduces the
-  issue, and claims one remediation generation;
-- the workflow creates a bounded Devin API session;
-- Devin investigates and returns a structured patch without publisher access;
-- a clean verifier enforces policy and acceptance before a controlled writer
-  opens a pull request;
-- a scheduled reconciler publishes queued, active, blocked, failed, cancelled,
-  timed-out, or successful status; and
-- clean-room acceptance and the repository's normal pull-request CI, not
-  Devin's self-report, decide whether the remediation succeeded.
-
-The pilot uses GitHub Actions for dispatch, reconciliation, cancellation, and
-reporting. This produces a working integration without first deploying a
-public webhook service, queue, or database. A small tested Python package owns
-the state machine and API contracts and can replay the same events in Docker.
-
-The
-[implementation document](09-github-issue-remediation-implementation.md)
-contains the architecture comparison, API contract, workflow skeletons,
-idempotency strategy, security boundaries, state and failure model,
-observability design, test plan, and production expansion criteria.
+- replace polling with authenticated event dispatch and reconciliation;
+- pin and reproduce an immutable target before session creation;
+- keep repository publishing credentials outside Devin;
+- have Devin return a patch rather than publish directly;
+- verify in a clean sandbox before a controlled writer opens the PR; and
+- add cancellation, richer status, policy versions, and production telemetry.
 
 The earlier failing-check, rebase, release, and migration analyses remain
 useful evaluated options and future trigger adapters. They are not the selected
@@ -80,3 +89,5 @@ goal.
 - [Event-driven remediation demo](../.devin/skills/event-driven-remediation-demo/SKILL.md)
   supplies the reusable safety, session-management, verification, testing, and
   observability checklist.
+- [Superset issue fix](../.devin/skills/superset-issue-fix/SKILL.md) is the
+  procedure used by the implemented controller.
