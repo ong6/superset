@@ -97,6 +97,17 @@ Add `CI check: <name>` under Expected when verification should wait for a check
 other than `Python-Unit`. Apply `devin-fix` to start. Repeated polls reuse the
 same label-event key; applying `devin-retry` creates a new key.
 
+The controller identifies each issue by its canonical GitHub URL, built from the
+configured repository and the issue number:
+
+```python
+>>> repository = "ong6/superset"
+>>> issue_number = 123
+>>> f"https://github.com/{repository}/issues/{issue_number}"
+'https://github.com/ong6/superset/issues/123'
+
+```
+
 ## Commands
 
 | Command | Behavior |
