@@ -102,7 +102,7 @@ GitHub failed check event
 
 | Component | Owns | Must not own |
 |---|---|---|
-| Webhook/API | HTTP validation, HMAC, timestamp, payload schema, delivery ID. | Repository trust decisions by payload URL alone. |
+| Webhook/API | HTTP validation, HMAC, payload schema, delivery ID, provider-resolved event age. | Repository trust decisions by payload URL alone. |
 | Resolver | Repository ID, PR number, head SHA, fork/trust state, workflow/job mapping. | Guessing if the event maps to multiple PRs. |
 | Idempotency store | Atomic delivery and failure-key claims. | In-memory duplicate suppression. |
 | Evidence collector | Logs, JUnit, annotations, workflow file, changed paths, artifact hashes. | Unbounded log ingestion or secret-bearing raw dumps into Devin. |
@@ -154,7 +154,8 @@ normalized event with the same internal fields.
 
 Reject before any sandbox, Devin, or GitHub publishing side effect when:
 
-- signature, timestamp, content type, payload size, or event/action is invalid;
+- signature, content type, payload size, delivery ID, or event/action is invalid;
+- the provider-resolved workflow completion time exceeds the freshness window;
 - repository ID is not allowlisted for the installation;
 - conclusion is not actionable;
 - the event maps to zero, multiple, closed, or stale PRs;
@@ -319,20 +320,24 @@ the final command as an argv array.
 ### Investigator session
 
 Create exactly one read-only investigator per failure key after evidence is
-collected and replayed. The documented API dependency is session creation via
-`POST /v1/sessions`, documented status polling, active-session termination via
-`DELETE /v1/sessions/{session_id}`, and supported enterprise follow-up
-messaging where enabled. The request shape below is the target adapter contract;
-implementation must validate optional fields against the active Devin API
-before relying on them:
+collected and replayed. The preferred adapter uses the organization-scoped v3
+API consistently: session creation via
+`POST /v3/organizations/{org_id}/sessions`, status and structured-output
+retrieval via `GET /v3/organizations/{org_id}/sessions/{session_id}`, and
+active-session termination via
+`DELETE /v3/organizations/{org_id}/sessions/{session_id}`. The request shape
+below is the target adapter contract:
 
 ```json
 {
   "title": "CI Rescue investigator: ong6/superset#42",
   "prompt": "<bounded prompt with evidence refs and acceptance taxonomy>",
-  "idempotent": true,
   "knowledge_ids": ["<repo-skill-or-knowledge-id-if-configured>"],
-  "max_acu_limit": 3.0,
+  "max_acu_limit": 3,
+  "repos": ["ong6/superset"],
+  "resumable": false,
+  "secret_ids": [],
+  "structured_output_required": true,
   "structured_output_schema": {
     "type": "object",
     "additionalProperties": false,
@@ -370,15 +375,13 @@ before relying on them:
     "repo:ong6/superset",
     "workflow:python-unit",
     "schema:ci-rescue-investigator-v1"
-  ],
-  "unlisted": true
+  ]
 }
 ```
 
-If optional fields such as `idempotent`, `max_acu_limit`, `knowledge_ids`,
-usage, or cost are unavailable in the chosen deployment tier, the controller
-still enforces its own failure-key idempotency and wall-clock budget, omits the
-unsupported field, and records the missing API data as `unknown`.
+The controller enforces its own failure-key idempotency and wall-clock budget.
+It records API-reported ACU and any unavailable usage or cost data as
+`unknown`.
 
 ### Investigator prompt contract
 
@@ -411,8 +414,11 @@ publisher credential.
 {
   "title": "CI Rescue repair: ong6/superset#42",
   "prompt": "<bounded repair prompt>",
-  "idempotent": true,
-  "max_acu_limit": 4.0,
+  "max_acu_limit": 4,
+  "repos": ["ong6/superset"],
+  "resumable": false,
+  "secret_ids": [],
+  "structured_output_required": true,
   "structured_output_schema": {
     "type": "object",
     "additionalProperties": false,
@@ -421,7 +427,18 @@ publisher credential.
       "outcome": { "type": "string", "enum": ["patch_proposed", "no_change", "blocked", "failed"] },
       "summary": { "type": "string", "maxLength": 600 },
       "changed_paths": { "type": "array", "items": { "type": "string" }, "maxItems": 8 },
-      "patch_ref": { "type": "string" },
+      "base_sha": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "patch_unified_diff": {
+        "type": "string",
+        "maxLength": 32768
+      },
+      "patch_sha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
       "verification_commands": { "type": "array", "items": { "type": "string" }, "maxItems": 4 },
       "risk_notes": { "type": "array", "items": { "type": "string" }, "maxItems": 8 }
     },
@@ -430,7 +447,9 @@ publisher credential.
       "outcome",
       "summary",
       "changed_paths",
-      "patch_ref",
+      "base_sha",
+      "patch_unified_diff",
+      "patch_sha256",
       "verification_commands",
       "risk_notes"
     ]
@@ -441,10 +460,15 @@ publisher credential.
     "repo:ong6/superset",
     "workflow:python-unit",
     "schema:ci-rescue-remediator-v1"
-  ],
-  "unlisted": true
+  ]
 }
 ```
+
+The controller persists the inline patch, checks its hash, applies it in a
+fresh checkout, derives changed paths from Git, and rejects any mismatch
+between the authorized SHA, claimed paths, and observed diff. A dedicated
+read-only Devin service identity must be used; prompt instructions are not a
+write-permission boundary.
 
 ### Session status handling
 
@@ -452,15 +476,15 @@ publisher credential.
 |---|---|
 | `new`, `claimed`, `running`, `resuming` | Continue polling until deadline with bounded backoff and jitter. |
 | `suspended` | If a supported follow-up is configured and one has not been used, send one evidence-rich message; otherwise mark non-success and terminate if policy requires. |
-| `exit` | Fetch and validate structured output; success is possible only after schema validation and controller cross-checks. |
+| `exit` | Validate returned structured output; success is possible only after schema validation and controller cross-checks. |
 | `error` | Terminal `devin_api_failed` or role-specific failure. |
 | Unknown status | Terminal non-success unless a documented API update explicitly adds handling. |
 
 The session ID is persisted before polling. If the controller crashes after
-creation, a sweeper resumes polling the persisted session instead of calling
-`POST /v1/sessions` again. On stale SHA, cancellation, or timeout, use
-`DELETE /v1/sessions/{session_id}` for active sessions when applicable, and
-record whether termination succeeded.
+creation, a sweeper resumes polling the persisted session instead of creating
+another session. On stale SHA, cancellation, or timeout, use
+`DELETE /v3/organizations/{org_id}/sessions/{session_id}` for active sessions
+when applicable, and record whether termination succeeded.
 
 ## 8. Authorization, policy, and publishing
 
@@ -820,7 +844,7 @@ WHERE created_at >= now() - interval '30 days';
 
 | Threat | Control |
 |---|---|
-| Forged webhook | HMAC signature, timestamp window, delivery ID, installation allowlist. |
+| Forged or replayed webhook | HMAC signature, delivery key, payload hash, provider-resolved workflow age, installation allowlist. |
 | Replay attack | Delivery key and payload hash retention. |
 | Payload repository spoofing | Resolve repository and PR via trusted provider API by immutable IDs. |
 | Prompt injection through logs or code | Treat logs/artifacts/code as quoted evidence; prompts forbid following embedded instructions. |
@@ -856,7 +880,7 @@ or broad organization privileges for the pilot.
 
 | Layer | Test | Expected result |
 |---|---|---|
-| Unit | Signature, timestamp, content type, payload schema. | Invalid inputs reject before side effects. |
+| Unit | Signature, delivery ID, event age, content type, payload schema. | Invalid inputs reject before side effects. |
 | Unit | Delivery and failure-key construction. | Stable keys; SHA changes create new failure key. |
 | Unit | Source-event and live-state review-ready gate. | Draft-origin or currently-draft runs make zero Devin API calls. |
 | Unit | Pytest node extraction from JUnit/log. | Exact command selected or evidence gap terminal. |

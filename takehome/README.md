@@ -31,7 +31,8 @@ automation built around the Devin API and this Superset fork.
 5. [Focused comparison of the three candidate automations](05-three-idea-evaluation.md)
 6. [Failing Check Repair technical specification](06-failing-check-repair-technical-spec.md)
 7. [Ready-for-review CI rescue test cases](07-ready-for-review-ci-cases.md)
-8. [Detailed recommendation and implementation design](04-recommendation.md)
+8. [PR CI Rescue product implementation design](07-product-implementation-design.md)
+9. [Detailed recommendation and implementation design](04-recommendation.md)
 
 ## Recommended direction
 
@@ -63,6 +64,10 @@ implementation sequence for a VP Engineering technical review.
 The ready-for-review test cases make the product boundary executable: draft CI
 never starts Devin, a fresh failed run after `ready_for_review` does, and
 duplicate, stale, or re-drafted runs fail closed.
+
+The product implementation design converts that specification into a concrete
+standalone package layout, typed ports, persisted state model, API adapter,
+patch handoff, fixture suite, and three-pull-request delivery sequence.
 
 ## Devin skills
 
