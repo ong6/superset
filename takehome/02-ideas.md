@@ -28,8 +28,8 @@ product question:
 > Will engineers choose to rely on Devin in their daily delivery workflow?
 
 The revised ranking starts with observed engineering pain. A 2026-09-08 GitHub
-API snapshot showed 429 open Apache Superset pull requests, including 206 older
-than 30 days and 133 older than 90 days. The repository has 52 GitHub workflow
+API snapshot showed 431 open Apache Superset pull requests, including 205 older
+than 30 days and 132 older than 90 days. The repository has 52 GitHub workflow
 definitions, and recent failed runs span Python, frontend, E2E, pre-commit, and
 database-specific suites.
 
@@ -52,6 +52,30 @@ Ideas lose points when they require a new dashboard engineers must remember to
 visit, produce generic summaries, need broad write access on day one, or address
 only a small fraction of pull requests.
 
+## Focused three-candidate decision
+
+The requested comparison is documented in
+[the standalone three-idea evaluation](05-three-idea-evaluation.md). Its
+independent evaluations and common rubric produce this order:
+
+| Candidate | Score | Decision |
+|---|---:|---|
+| Failing Check Repair Tool | 9.1 | Build first |
+| Rebase Conflict Resolver | 8.8 | First platform extension |
+| Release Cherry-Pick Tool | 8.2 | Second platform extension |
+
+The rebase resolver has an unusually concrete adoption surface: a
+2026-09-08 public GitHub snapshot found 168 of 431 open Superset pull requests
+carrying `requires:rebase`. It ranks just behind failed-check repair because
+semantic conflict resolution is harder to certify, publishing a rewritten
+candidate requires a stricter trust model, and a five-minute proof needs more
+oracles than one fail-before/pass-after test.
+
+Release cherry-picking is high-consequence but narrower. Superset already uses
+release labels and `cherrytree` for candidate discovery and clean mechanical
+picks. Devin adds the most value only for dependency ambiguity, semantic
+applicability, conflict resolution, and test selection.
+
 ## Recommendation
 
 Build the **PR CI Rescue Autopilot** first.
@@ -62,15 +86,20 @@ begins with read-only permissions, provides value to contributors and
 maintainers, and creates a direct adoption metric: do engineers use and accept
 its output?
 
-The backup option is **Flaky Test Triage and Stabilization**. It addresses the
-same visible pain with an even safer read-only start, but reliable flake proof
-often requires repeated runs and therefore produces a less compact demo.
+For the requested three candidates, the backup option is the **Rebase Conflict
+Resolver**. It addresses visible, high-volume pain and gives Devin a strong
+two-sided intent-reasoning task, but safe semantic proof and publication are
+less compact than the failed-check repair loop.
 
 The [detailed recommendation](04-recommendation.md) defines the selected
 failure contract, state machine, trust model, session boundaries, demo fixture,
 metrics, and implementation steps.
 
-## Ranked ideas
+## Broader discovery inventory
+
+The earlier inventory below retains additional expansion ideas and its original
+relative scores. The focused three-candidate scorecard is the authoritative
+decision for the take-home build.
 
 ### 1. PR CI Rescue Autopilot — 9.6
 

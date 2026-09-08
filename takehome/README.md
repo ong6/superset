@@ -28,7 +28,8 @@ automation built around the Devin API and this Superset fork.
 2. [Ranked automation ideas](02-ideas.md)
 3. [Superset codebase overview](03-codebase-overview.md)
 4. [Architecture map](architecture/README.md)
-5. [Detailed recommendation and implementation design](04-recommendation.md)
+5. [Focused comparison of the three candidate automations](05-three-idea-evaluation.md)
+6. [Detailed recommendation and implementation design](04-recommendation.md)
 
 ## Recommended direction
 
@@ -46,3 +47,17 @@ This direction starts with a workflow engineers already feel:
 - deterministic commands verify the diagnosis and repair;
 - the pilot can begin read-only, then add opt-in remediation after trust is
   established.
+
+The focused comparison independently evaluates a **Rebase Conflict Resolver**,
+**Failing Check Repair Tool**, and **Release Cherry-Pick Tool**. It ranks failed
+check repair first, then shows how the other two can reuse the same event,
+session, policy, verification, publishing, and observability platform.
+
+## Devin skills
+
+- [FDE customer-value demo](../.devin/skills/fde-customer-value-demo/SKILL.md)
+  steers discovery and presentation toward evidenced customer value, adoption,
+  and a credible trust path.
+- [Event-driven remediation demo](../.devin/skills/event-driven-remediation-demo/SKILL.md)
+  supplies the reusable safety, session-management, verification, testing, and
+  observability checklist.
