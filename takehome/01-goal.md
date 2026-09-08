@@ -104,30 +104,36 @@ the repository, make the smallest safe change, and return observable artifacts.
   - How many issues were fixed?
   - What did each successful remediation cost?
 
-## Four-day execution plan
+## Fast implementation sequence
 
-### Day 1 — bounded vertical slice
+This is a compact four-step build sequence, not a four-day estimate. The
+intentionally narrow migration fixture, deterministic oracle, and replayable
+event path make it suitable for rapid implementation and demonstration.
 
-- Select and seed the first Superset issue.
-- Implement the Dockerized controller, event schema, persistence, and replay CLI.
-- Implement idempotency by delivery ID and commit SHA.
-- Stub the Devin client and GitHub output adapters.
+### Step 1 — define the failure contract
 
-### Day 2 — deterministic oracle
+- Add one fork-local migration issue and seeded failing revision.
+- Implement the graph, upgrade, downgrade, and re-upgrade rehearsal.
+- Emit a structured result containing the revision, invariant, command, logs,
+  duration, and outcome.
 
-- Implement the repository-specific reproduction command.
-- Capture structured results, logs, artifacts, and timeouts.
-- Add unit tests for event filtering, deduplication, and state transitions.
+### Step 2 — build the event controller
 
-### Day 3 — Devin-managed remediation
+- Add the Dockerized webhook/replay entry point and SQLite run state.
+- Filter migration-related pull requests and deduplicate by delivery ID and
+  head SHA.
+- Run the deterministic oracle and start Devin only for a reproduced failure.
 
-- Create investigator and remediation session contracts.
-- Poll sessions and validate structured output.
-- Create or update the fork issue and remediation pull request.
-- Re-run the deterministic oracle against the proposed change.
+### Step 3 — manage investigation and remediation
 
-### Day 4 — observability and presentation
+- Create bounded investigator and remediation session contracts.
+- Poll sessions, validate structured output, and expose terminal states.
+- Create or update the GitHub issue, remediation pull request, and check.
+- Re-run the same oracle against the proposed change.
 
-- Add status and metrics endpoints plus a concise run summary.
-- Exercise success, failure, duplicate-event, and timeout paths.
-- Finalize README, architecture, runbook, and five-minute demo script.
+### Step 4 — prove and present the loop
+
+- Exercise success, failure, duplicate-event, malformed-output, and timeout
+  paths.
+- Publish status, latency, throughput, success-rate, and cost metrics.
+- Finalize the README, runbook, architecture, and five-minute demo.

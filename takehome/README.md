@@ -28,7 +28,7 @@ automation built around the Devin API and this Superset fork.
 2. [Ranked automation ideas](02-ideas.md)
 3. [Superset codebase overview](03-codebase-overview.md)
 4. [Architecture map](architecture/README.md)
-5. [Recommendation and next steps](04-recommendation.md)
+5. [Detailed recommendation and implementation design](04-recommendation.md)
 
 ## Recommended direction
 

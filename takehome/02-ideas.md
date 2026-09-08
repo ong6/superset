@@ -32,7 +32,7 @@ the candidates with this weighted rubric:
 | Technical depth | 20% |
 | Devin-as-core-primitive fit | 25% |
 | Five-minute demo strength | 15% |
-| Four-day feasibility | 20% |
+| Implementation speed and feasibility | 20% |
 
 Ideas were penalized when they were too broad, depended on nondeterministic
 evidence, risked unsafe vulnerability framing, used Devin only as a summarizer,
@@ -51,6 +51,10 @@ reproduces the failure.
 The backup option is **Python Pin Drift Autopilot**. It is easier to implement
 and operationally useful, but it is less technically deep than migration
 rehearsal.
+
+The [detailed recommendation](04-recommendation.md) explains the selected
+idea's migration contract, deterministic oracle, event state machine, Devin
+session boundaries, demo fixture, outputs, metrics, and implementation steps.
 
 ## Top ideas
 
@@ -291,7 +295,7 @@ compatibility strategy; deterministic builds and tests decide pass/fail.
 ## Rejected or merged concepts
 
 - **Async task and realtime principal-isolation gate:** important but too broad
-  for the first four-day build because it requires full Compose,
+  for the first implementation because it requires full Compose,
   Redis/WebSocket/task identity matrices, and careful vulnerability handling.
 - **Direct-dependency provenance and remediation broker:** valuable, but the
   vulnerability/SCA framing risks premature claims; Python Pin Drift has cleaner
@@ -309,7 +313,7 @@ compatibility strategy; deterministic builds and tests decide pass/fail.
 - **Bounded TypeScript and deprecated-pattern debt queue:** actionable, but more
   like backlog generation than an evidence-driven repair loop.
 - **Bundle regression investigator:** promising later extension, but less
-  deterministic for a four-day take-home.
+  deterministic for a compact take-home implementation.
 - **Release Candidate Readiness Gate / Feature-Flag Lifecycle Governor:** broad
   governance checks with weaker five-minute proof.
 - **Generic LLM reviewer:** rejected because it lacks a deterministic oracle and
