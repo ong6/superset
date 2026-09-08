@@ -22,17 +22,19 @@ under the License.
 ## Selected build: GitHub Issue Remediation Runner
 
 Build a maintainer-authorized GitHub automation that turns one repository issue
-into one bounded Devin session, one reviewable pull request, independently
-verified CI, and a visible terminal outcome on the issue.
+into one deterministic reproduction, one bounded Devin patch proposal, one
+clean-room verification, one controlled pull request, independently verified
+CI, and a visible terminal outcome on the issue.
 
 This is the best first implementation because it matches the original
 take-home goal directly:
 
 - the trigger is a real issue in the target repository;
 - the authorization is a normal maintainer label;
-- Devin performs the investigation and code change;
-- the output is a normal pull request;
-- repository CI provides deterministic proof; and
+- Devin performs the repository-scale investigation and proposes the code
+  change;
+- a controlled writer publishes only after independent verification;
+- clean-room acceptance and repository CI provide deterministic proof; and
 - status, failure, and success remain visible in GitHub.
 
 The complete technical plan is in
@@ -63,10 +65,13 @@ The first version supports:
 
 - one configured repository;
 - one open issue;
+- one strict, machine-readable issue contract;
 - one `devin:fix` authorization label;
 - one active remediation generation;
 - one configured Devin playbook;
-- one bounded Devin session;
+- one pinned target SHA and clean preflight;
+- one bounded, read-only Devin session;
+- one clean verifier and controlled writer;
 - one linked pull request; and
 - one configured set of required GitHub checks.
 
@@ -80,13 +85,16 @@ Use **GitHub Actions dispatcher plus scheduled reconciler** for the pilot.
 
 ```text
 issues.labeled(`devin:fix`)
-  -> validate and claim
+  -> validate contract, authorize, pin SHA, and reproduce
+  -> claim
   -> create Devin session
   -> publish queued/running state
 
 schedule / workflow_dispatch
   -> poll session
-  -> discover and validate PR
+  -> validate structured patch
+  -> clean-room policy and acceptance verification
+  -> recheck target SHA and publish one PR
   -> read required checks
   -> publish terminal outcome
 ```
@@ -129,6 +137,8 @@ The dispatcher validates:
 - issue state and type;
 - exact label;
 - actor permission resolved through the GitHub API;
+- strict contract fields, command IDs, allowed paths, and risk tier;
+- immutable target SHA and deterministic preflight evidence;
 - absence of another active generation; and
 - the versioned state record after claiming it.
 
@@ -137,50 +147,57 @@ follow measured quality, cost, and failure handling.
 
 ## Devin API
 
-For the Actions-native pilot, use the documented v1 API consistently:
+Use the current organization-scoped v3 lifecycle consistently:
 
 ```text
-POST   /v1/sessions
-GET    /v1/sessions?tags=...
-GET    /v1/sessions/{session_id}
-DELETE /v1/sessions/{session_id}
+POST   /v3/organizations/{org_id}/sessions
+GET    /v3/organizations/{org_id}/sessions
+GET    /v3/organizations/{org_id}/sessions/{devin_id}
+DELETE /v3/organizations/{org_id}/sessions/{devin_id}
 ```
 
 The create request should:
 
-- enable documented API idempotency;
 - set a positive `max_acu_limit`;
 - select one reviewed `playbook_id`;
 - restrict `repos` to `ong6/superset`;
 - pass explicit empty secret and knowledge lists by default;
+- set `resumable: false`;
+- require a versioned, bounded structured-output schema containing outcome,
+  summary, unified diff, claimed paths, evidence, and verification commands;
 - add repository, issue, generation, workflow, and run-key tags; and
-- remain unlisted.
+- give the selected Devin identity read-only repository access.
 
 The dispatcher stores the returned session ID and URL immediately. The
-reconciler uses the session status and pull-request metadata, but never treats
-session completion as proof of a correct repair.
-
-The production controller may adopt the organization-scoped v3 endpoints when
-its additional structured-output and usage fields are required. One adapter
-must use one documented lifecycle consistently; do not mix status vocabularies
-inside the same state transition.
+reconciler evaluates both `status` and `status_detail`, validates structured
+output, and never treats session completion as proof of a correct repair.
+`waiting_for_user` and `waiting_for_approval` are unattended
+`interaction_required` failures. Because v3 creation has no idempotency field,
+an ambiguous create is reconciled by exact unique tags in a bounded recent
+session listing; it is never retried blindly.
 
 ## State model
 
 ```text
 requested
+  -> validated
+  -> authorized
+  -> target_pinned
+  -> evidence_ready
   -> claimed
-  -> dispatching
+  -> creating_session
   -> session_running
-  -> pull_request_open
+  -> proposed
   -> verifying
+  -> publishing
+  -> pull_request_open
+  -> ci_verifying
   -> succeeded
 ```
 
 Visible nonterminal states:
 
 ```text
-needs_input
 cancelling
 ```
 
@@ -194,6 +211,9 @@ no_change
 blocked
 failed
 verification_failed
+policy_violation
+stale
+publish_failed
 timed_out
 cancelled
 ```
@@ -216,7 +236,12 @@ failure.
 
 Publish `succeeded` only when:
 
-- one terminal session produced one valid linked PR;
+- one terminal session returned valid structured output;
+- its patch applied to a clean checkout at the pinned SHA;
+- Git-derived paths and file modes passed policy;
+- controller-owned acceptance commands passed;
+- the target branch still matched the pinned SHA before publication;
+- the controlled writer produced one valid linked PR;
 - the PR is in the configured repository and targets the configured branch;
 - its head SHA is stable;
 - the issue link is present;
@@ -226,11 +251,13 @@ Publish `succeeded` only when:
 Failures use bounded machine-readable reasons:
 
 - invalid or unauthorized event;
+- invalid issue contract or failed reproduction;
 - duplicate generation;
 - API create rejected or ambiguous;
 - API polling exhausted;
-- session blocked or expired;
-- session finished without a PR;
+- interaction required, suspended, or malformed structured output;
+- no proposal, patch application, policy, verification, or stale-SHA failure;
+- controlled publication failure;
 - invalid PR;
 - required check failed or missing;
 - timeout;
@@ -253,7 +280,7 @@ Use four defenses:
 
 1. an Actions concurrency group per issue;
 2. one durable hidden state record in the issue status comment;
-3. documented Devin API idempotency and unique tags; and
+3. unique v3 session tags and no blind ambiguous-create retry; and
 4. idempotent reconciliation that updates existing labels and comments.
 
 Do not blindly retry an ambiguous session create. Query by unique tags first,
@@ -261,19 +288,27 @@ then require an operator decision if the API cannot prove whether creation
 succeeded.
 
 Scheduled reconciliation is restart recovery. It resumes from the stored
-session ID, Devin state, linked PR, and GitHub checks after any Actions job
-exits or fails.
+session ID, Devin state, proposal or published PR, and GitHub checks after any
+Actions job exits or fails.
 
 ## Security
 
 - Treat issue text, repository content, session output, and PR metadata as
   untrusted.
-- Keep `DEVIN_API_KEY` and `GITHUB_TOKEN` in Actions only.
+- Keep `DEVIN_API_TOKEN`, `GITHUB_TOKEN`, and publisher credentials in Actions
+  only.
 - Give the workflow the minimum GitHub permissions for its current phase.
 - Give Devin no organization secrets by default.
-- Let Devin create only a branch and PR through its own scoped integration.
+- Give Devin read-only repository access and require structured patch output.
+- Build prompts from parsed event data; never interpolate issue text into a
+  shell script.
+- Apply the patch in a fresh checkout at the pinned SHA, derive changed paths
+  from Git, and run only allowlisted argv commands.
+- Re-resolve the target SHA immediately before publication.
+- Let a controlled writer mint a short-lived GitHub App installation token
+  only after verification, then create or update the bot branch and PR.
 - Protect the default branch and require review and CI.
-- Validate the returned PR before monitoring or publishing success.
+- Validate the published PR before monitoring or publishing success.
 - Revoke work when the issue closes or authorization is removed.
 - Pin third-party Actions by full commit SHA.
 - Bound prompt, issue text, retries, ACU, wall clock, and active runs.
@@ -286,6 +321,8 @@ shows:
 
 - current phase and last update;
 - session and pull-request links;
+- target SHA, evidence hash, patch hash, and policy version;
+- preflight and clean-room verification result;
 - required-check progress;
 - elapsed time;
 - terminal outcome and reason; and
@@ -330,11 +367,13 @@ Devin.
 
 ### Stage 2: live session, read-only repository access
 
-Devin investigates and reports blockers, but cannot publish a branch.
+Devin investigates and returns bounded structured output, but cannot publish a
+branch.
 
-### Stage 3: branch and pull-request creation
+### Stage 3: clean verification and controlled publication
 
-Devin may open a PR. GitHub CI and human review remain mandatory.
+The controller verifies the patch, rechecks the target SHA, and lets the
+controlled writer open the PR. GitHub CI and human review remain mandatory.
 
 ### Stage 4: broader intake
 
@@ -361,7 +400,10 @@ Use one honest Superset issue with:
 
 - a reproducible, narrowly scoped defect;
 - clear expected behavior;
+- a strict contract with controller-owned reproduction and acceptance command
+  IDs;
 - one focused failing test;
+- one low-risk allowed-path set;
 - a small production-code repair; and
 - normal repository CI coverage.
 
@@ -370,18 +412,21 @@ Demo:
 1. apply `devin:fix`;
 2. show queued and running status;
 3. show exactly one linked session;
-4. show the remediation PR;
-5. show required CI turn green;
-6. show the issue outcome become `succeeded`;
-7. replay the label event and show no duplicate; and
-8. show one cancelled or failed fixture with an actionable terminal reason.
+4. show the structured patch and clean verifier pass;
+5. show the controlled remediation PR;
+6. show required CI turn green;
+7. show the issue outcome become `succeeded`;
+8. replay the label event and show no duplicate; and
+9. show one stale, cancelled, or verification-failed fixture with an
+   actionable terminal reason.
 
 ## Implementation order
 
 1. Build the typed local controller and fixtures.
 2. Add dispatch, reconcile, cancel, and report workflows.
-3. Configure the Devin API secret, playbook, labels, required checks, and kill
-   switch.
+3. Configure the Devin API token and organization ID, playbook, read-only
+   service identity, publisher identity, labels, command policy, required
+   checks, and kill switch.
 4. Run dry mode and failure-path tests.
 5. Enable one scoped remediation issue.
 6. Capture the success and non-success run artifacts.

@@ -38,20 +38,23 @@ automation built around the Devin API and this Superset fork.
 ## Recommended direction
 
 Build the **GitHub Issue Remediation Runner**: a maintainer-authorized GitHub
-Action that turns a repository issue into one bounded Devin session, one
-reviewable pull request, independently verified CI, and one observable status
-record on the issue.
+Action that turns a strict repository issue contract into one bounded Devin
+patch proposal, one independently verified pull request, and one observable
+status record on the issue.
 
 This is the authoritative take-home direction:
 
 - a maintainer applies `devin:fix` to an open issue;
-- a dispatcher workflow validates and claims one remediation generation;
+- a dispatcher validates the contract, pins the target SHA, reproduces the
+  issue, and claims one remediation generation;
 - the workflow creates a bounded Devin API session;
-- Devin investigates, implements, tests, and opens a pull request;
+- Devin investigates and returns a structured patch without publisher access;
+- a clean verifier enforces policy and acceptance before a controlled writer
+  opens a pull request;
 - a scheduled reconciler publishes queued, active, blocked, failed, cancelled,
   timed-out, or successful status; and
-- the repository's normal pull-request CI, not Devin's self-report, decides
-  whether the remediation succeeded.
+- clean-room acceptance and the repository's normal pull-request CI, not
+  Devin's self-report, decide whether the remediation succeeded.
 
 The pilot uses GitHub Actions for dispatch, reconciliation, cancellation, and
 reporting. This produces a working integration without first deploying a

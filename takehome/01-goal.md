@@ -29,9 +29,10 @@ The core proof is:
 ```text
 GitHub issue
   -> maintainer authorization
-  -> Devin API session
-  -> repository-scale investigation and implementation
-  -> remediation pull request
+  -> strict issue contract, immutable target, and deterministic reproduction
+  -> bounded Devin API patch proposal
+  -> clean-room policy and acceptance verification
+  -> controlled remediation pull request
   -> independent repository CI
   -> visible success or failure on the issue
 ```
@@ -45,7 +46,7 @@ The result should demonstrate:
 3. **Observable operation:** maintainers can see active status, terminal
    outcome, failure reason, links, latency, and cost or explicit cost unknowns.
 4. **Customer value:** an issue moves from reported problem to a reviewable,
-   CI-verified code change without leaving GitHub.
+   independently verified code change without leaving GitHub.
 
 The [implementation document](09-github-issue-remediation-implementation.md)
 is the authoritative technical design.
@@ -71,21 +72,25 @@ automatically after the pilot earns trust.
 
 ```text
 issues.labeled(`devin:fix`)
-  -> dispatcher validates repository, issue, actor, and kill switch
+  -> dispatcher validates contract, repository, issue, actor, and kill switch
+  -> dispatcher pins the target SHA and reproduces the issue cleanly
   -> dispatcher serializes and claims one issue generation
   -> dispatcher creates one bounded Devin API session
   -> issue comment and label show queued/running status
-  -> Devin investigates, changes code, tests, and opens a linked PR
-  -> scheduled reconciler polls the session and PR
+  -> Devin investigates and returns a structured patch proposal
+  -> scheduled reconciler cleanly applies, checks policy, and verifies it
+  -> controlled writer opens one linked PR if the target SHA is still current
   -> required GitHub checks independently verify the change
   -> issue shows succeeded, failed, blocked, timed-out, or cancelled
   -> metrics report funnel, latency, quality, reliability, adoption, and ACU
 ```
 
 GitHub Actions owns event wiring, permissions, secrets, and scheduling. A small
-Python controller package owns validation, state transitions, API contracts,
+Python controller package owns validation, immutable evidence, state
+transitions, API contracts, clean-room verification, controlled publication,
 status rendering, and recovery. Devin owns repository-scale investigation and
-implementation. GitHub CI owns the success oracle.
+the bounded patch proposal. The controller and GitHub CI own the success
+oracle.
 
 ## Deliverables
 
@@ -102,7 +107,10 @@ implementation. GitHub CI owns the success oracle.
 ### Superset fork
 
 - One honest, narrowly scoped issue with reproducible acceptance criteria.
-- One Devin-managed remediation pull request linked with `Fixes #<issue>`.
+- One strict machine-readable issue contract with allowlisted command IDs and
+  paths.
+- One controller-published remediation pull request linked with
+  `Fixes #<issue>`.
 - Evidence that the relevant check fails before and passes after the repair.
 - One visible non-success path such as cancellation, timeout, or failed CI.
 - No direct write to the protected default branch.
@@ -112,22 +120,28 @@ implementation. GitHub CI owns the success oracle.
 - **Problem:** an accepted issue still requires investigation, implementation,
   test selection, and a reviewable pull request.
 - **Event:** a maintainer adds `devin:fix`.
-- **Devin work:** investigate the issue, implement the smallest scoped repair,
-  run relevant checks, and open a pull request.
-- **Proof:** normal GitHub CI independently passes on the remediation PR.
+- **Devin work:** investigate the issue and return the smallest scoped patch
+  proposal with structured evidence.
+- **Proof:** a clean verifier passes before publication, then normal GitHub CI
+  independently passes on the remediation PR.
 - **Operations:** the issue shows active status, links, terminal outcome,
   failure reason, latency, and ACU or explicit cost unknowns.
 
 ## Safety boundary
 
 - Public issue content is untrusted task data.
+- The issue contract is strict data; command IDs resolve to controller-owned
+  argv arrays, never issue-supplied shell.
 - Label authorization and live repository permission are required.
+- The target branch is pinned to a full SHA and reproduced before Devin starts.
 - One issue has at most one nonterminal remediation generation.
-- The Actions token and Devin API key never enter the Devin session.
+- The Actions token and Devin API token never enter the Devin session.
 - Devin receives no organization secret by default.
-- Devin may create a branch and pull request, but may not merge or bypass
-  protection.
-- The reconciler validates the returned PR repository, base branch, head,
+- Devin has read-only repository access and cannot create a branch or PR.
+- The reconciler validates structured output, derives changed paths from Git,
+  applies policy, and runs acceptance in a fresh checkout.
+- A controlled writer publishes only after the target SHA is rechecked.
+- The reconciler validates the published PR repository, base branch, head,
   issue link, and required checks.
 - Devin self-reported completion is never sufficient for success.
 - Closing the issue or removing authorization cancels active work.
@@ -137,7 +151,9 @@ implementation. GitHub CI owns the success oracle.
 
 Every run exposes:
 
-- issue, generation, run key, Actions run, Devin session, PR, and head SHA;
+- issue, generation, run key, Actions run, Devin session, PR, target SHA, and
+  PR head SHA;
+- evidence hash, patch hash, command-policy version, and clean verification;
 - phase, transition version, last update, attempt count, and elapsed time;
 - active, blocked, cancelling, or terminal status;
 - terminal outcome and bounded failure reason;
@@ -174,11 +190,15 @@ The pilot report must answer:
 ## Definition of done
 
 - A maintainer can apply `devin:fix` to a real issue.
+- The strict issue contract validates and a clean preflight reproduces it.
 - Exactly one Devin session is created for one issue generation.
 - The issue displays queued or active status within two minutes.
 - A scheduled reconciler resumes after disposable Actions jobs exit.
-- The managed session opens one linked remediation PR.
-- Required GitHub checks decide whether the automation succeeded.
+- The managed session returns schema-valid structured output without publisher
+  credentials.
+- Clean-room acceptance passes before a controlled writer opens one linked PR.
+- Clean-room verification and required GitHub checks decide whether the
+  automation succeeded.
 - Failure, blocked, timeout, cancellation, and duplicate states are visible.
 - Duplicate delivery does not create another session, comment, or PR.
 - The automation can be disabled without changing code.
@@ -190,23 +210,25 @@ The pilot report must answer:
 
 ### Step 1 — deterministic controller
 
-- Add typed issue, session, PR, check, and state models.
+- Add typed issue-contract, session, patch, PR, check, and state models.
 - Implement dispatch, reconcile, cancel, and status rendering with fake
   adapters.
-- Prove duplicate, blocked, timeout, failed-CI, and cancellation fixtures.
+- Prove preflight, duplicate, malformed-output, policy, stale-SHA,
+  verification, timeout, failed-CI, and cancellation fixtures.
 
 ### Step 2 — live GitHub and Devin integration
 
 - Add pinned GitHub Actions workflows.
-- Add live API adapters and secret configuration.
+- Add live v3 API adapters and secret configuration.
 - Publish one updateable issue comment and status label.
 - Keep dry-run mode enabled by default.
 
 ### Step 3 — controlled remediation
 
 - Configure the reviewed issue-remediation playbook.
-- Enable branch and PR creation through Devin's repository integration.
-- Validate the returned PR and monitor required CI.
+- Keep Devin read-only and require a bounded structured patch.
+- Enable clean verification and controlled branch and PR publication.
+- Validate the published PR and monitor required CI.
 - Demonstrate one issue-to-green-PR path.
 
 ### Step 4 — observability and rollout

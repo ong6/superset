@@ -513,9 +513,9 @@ Create exactly one read-only investigator per failure key after evidence is
 collected and replayed. The preferred adapter uses the organization-scoped v3
 API consistently: session creation via
 `POST /v3/organizations/{org_id}/sessions`, status and structured-output
-retrieval via `GET /v3/organizations/{org_id}/sessions/{session_id}`, and
+retrieval via `GET /v3/organizations/{org_id}/sessions/{devin_id}`, and
 active-session termination via
-`DELETE /v3/organizations/{org_id}/sessions/{session_id}`. The request shape
+`DELETE /v3/organizations/{org_id}/sessions/{devin_id}`. The request shape
 below is the target adapter contract:
 
 ```json
@@ -707,7 +707,7 @@ what the API accepts.
 The session ID is persisted before polling. If the controller crashes after
 creation, a sweeper resumes polling the persisted session instead of creating
 another session. On stale SHA, cancellation, or timeout, use
-`DELETE /v3/organizations/{org_id}/sessions/{session_id}` for active sessions
+`DELETE /v3/organizations/{org_id}/sessions/{devin_id}` for active sessions
 when applicable. A `200` response acknowledges the request but is not proof of
 a terminal state, so continue bounded polling and record whether termination
 completed.

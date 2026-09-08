@@ -271,9 +271,14 @@ runtime code to the product.
 For the selected GitHub Issue Remediation Runner:
 
 - trigger when a maintainer applies `devin:fix` to an open issue;
+- validate a strict issue contract, resolve a full target SHA, and reproduce
+  the issue through a controller-owned command policy;
 - serialize and deduplicate one active remediation generation per issue;
-- create one bounded Devin API session with a reviewed playbook;
-- let Devin investigate, implement, test, and open a linked pull request;
+- create one bounded, read-only Devin API session with a reviewed playbook;
+- let Devin investigate and return a bounded structured patch;
+- derive the actual diff, enforce path and file-mode policy, verify it in a
+  clean checkout, recheck the target SHA, and publish through a controlled
+  writer;
 - keep Actions and publisher credentials outside the Devin session;
 - reconcile the session, pull request, and CI on a schedule;
 - publish one updateable issue comment and status label;

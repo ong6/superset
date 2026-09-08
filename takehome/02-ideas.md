@@ -72,12 +72,14 @@ independent oracle.
 Build the **GitHub Issue Remediation Runner** with:
 
 - `issues.labeled` and `devin:fix` as the first authorization event;
-- a GitHub Actions dispatcher that validates, claims, and creates one Devin
-  session;
-- a scheduled reconciler that tracks session, PR, and CI state;
+- a strict issue contract, immutable target SHA, and deterministic preflight;
+- a GitHub Actions dispatcher that validates, claims, and creates one
+  read-only Devin session;
+- a scheduled reconciler that verifies the structured patch, publishes through
+  a controlled writer, and tracks PR and CI state;
 - one updateable issue comment and mutually exclusive status label;
 - cancellation when the issue closes or authorization is removed;
-- repository CI as the success oracle; and
+- clean-room acceptance plus repository CI as the success oracle; and
 - a tested Docker-replayable Python controller package.
 
 The [detailed recommendation](04-recommendation.md) defines the selected

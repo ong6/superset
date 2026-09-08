@@ -806,13 +806,13 @@ with:
 Session observation uses:
 
 ```text
-GET /v3/organizations/{org_id}/sessions/{session_id}
+GET /v3/organizations/{org_id}/sessions/{devin_id}
 ```
 
 and active termination uses:
 
 ```text
-DELETE /v3/organizations/{org_id}/sessions/{session_id}
+DELETE /v3/organizations/{org_id}/sessions/{devin_id}
 ```
 
 Session IDs are opaque strings. The adapter must not require the documented
