@@ -17,12 +17,18 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Technical Specification: Failing Check Repair for Apache Superset
+# Future Extension: Failing Check Repair Technical Specification
 
-## 1. Executive technical decision
+## 1. Document role
 
-Build **PR CI Rescue** as a narrow, event-driven automation that turns one
-failed pull-request check into:
+The selected first implementation is the
+[GitHub Issue Remediation Runner](09-github-issue-remediation-implementation.md).
+This specification is retained as the preferred second trigger after the
+issue-to-PR loop proves session management, status, policy, independent
+verification, and observability.
+
+The future **PR CI Rescue** adapter would turn one failed pull-request check
+into:
 
 1. validated, deduplicated, immutable work;
 2. deterministic failure reproduction outside Devin;
@@ -33,12 +39,12 @@ failed pull-request check into:
 7. telemetry that records safety, usefulness, latency, throughput, and
    API-reported cost or explicit cost-unknowns.
 
-The first product PR should implement only one Superset path: a trusted
-same-repository pull request, one failed Python unit check, one immutable head
-SHA, and one exact pytest node. That constraint makes the VP Engineering
-review concrete: the system is not an unfalsifiable “AI fixes CI” promise; it
-is a control plane with an auditable state machine and deterministic
-fail-before/pass-after proof.
+The first CI-extension pull request should implement only one Superset path: a
+trusted same-repository pull request, one failed Python unit check, one
+immutable head SHA, and one exact pytest node. That constraint makes the VP
+Engineering review concrete: the system is not an unfalsifiable “AI fixes CI”
+promise; it is a control plane with an auditable state machine and
+deterministic fail-before/pass-after proof.
 
 ## 2. Scope, non-goals, and trust progression
 
@@ -735,7 +741,7 @@ independently authorize a repair. A deployment probe verifies the provider's
 advertised accepted permissions and fails closed rather than granting broader
 organization access by default.
 
-### Patch policy for the first product slice
+### Patch policy for the first CI-extension slice
 
 Allow only:
 

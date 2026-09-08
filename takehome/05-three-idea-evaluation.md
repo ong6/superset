@@ -17,24 +17,22 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Decision: Event-Driven Devin Automation for Apache Superset
+# Prior Candidate Comparison: CI, Rebase, and Release Automation
 
-## 1. Executive recommendation
+## 1. Document role
 
-**Build the Failing Check Repair Tool first.** Start as a read-only **PR CI
-Rescue** service for one failed Python unit check on one open pull request at
-one immutable head SHA. Add an opt-in repair only for a same-repository trusted
-branch after the diagnosis path is reliable.
+This document preserves the evidence-led comparison of three pull-request and
+release automations. It does not override the original issue-to-remediation
+deliverable. The selected first implementation is the
+[GitHub Issue Remediation Runner](09-github-issue-remediation-implementation.md).
 
-This is a decisive choice, not a tie. The Failing Check Repair Tool scores
+Within this three-option comparison, the Failing Check Repair Tool scores
 **9.1/10**, ahead of the Rebase Conflict Resolver at **8.8** and the Release
-Cherry-Pick Tool at **8.2**. It wins because it combines the broadest recurring
-workflow, the clearest fail-before/pass-after oracle, an immediately useful
-read-only output, meaningful Devin investigation and repair, and a compact
-five-minute story. It also matches the take-home's existing failed-check system
-loop and deliverables directly (`takehome/01-goal.md:63-82,95-121`).
+Cherry-Pick Tool at **8.2**. It is therefore the preferred **future automatic
+trigger** after the issue-driven session, status, policy, verification, and
+observability loop works.
 
-The recommendation is deliberately narrower than “autofix CI.” The first build
+The CI-rescue concept is deliberately narrower than “autofix CI.” Its build
 must not repair untrusted forks, infer flakiness from one rerun, execute commands
 suggested by logs or a model, let Devin hold GitHub credentials, or call a
 repair successful from Devin's report alone. The controller owns event
@@ -42,9 +40,8 @@ validation, immutable correlation, commands, authorization, state, and
 verification. Devin owns evidence-based diagnosis and the bounded production
 code change.
 
-The other ideas remain valuable. They should become later workflow adapters on
-the same event/session/policy/proof platform rather than three separate
-products.
+All three should become later workflow adapters on the issue-remediation
+event/session/policy/proof platform rather than separate products.
 
 ## 2. Evidence snapshot: facts, assumptions, and limits
 
@@ -63,7 +60,7 @@ independent evaluations were performed.
 | 2026-09-08 | The preceding 30 days contained 753 merged PRs. | The target branch changes substantially. This is context, not causal proof for individual conflicts. |
 | 2026-09-08 | Release-label searches returned 348 PRs for `v6.0`, 188 for `v5.0`, and 222 for `v4.1`. | Release candidate sets can be large. Label totals do not reveal conflict rate, release cadence, or manual effort. |
 | Repository checkout | Superset defines 52 GitHub workflows and has Python, frontend, integration, E2E, migration, generated-file, and dependency checks (`takehome/03-codebase-overview.md:225-259`). | There is broad, heterogeneous CI and no safe universal replay command. |
-| Repository checkout | Python unit CI emits JUnit artifacts, while a separate `workflow_run` reporter writes checks from base-branch context without checking out PR code (`.github/workflows/superset-python-unittest.yml:66-117`; `.github/workflows/superset-python-unittest-report.yml:3-21,34-69`). | There is a concrete event, evidence source, GitHub output surface, and privilege-separation precedent for the selected build. |
+| Repository checkout | Python unit CI emits JUnit artifacts, while a separate `workflow_run` reporter writes checks from base-branch context without checking out PR code (`.github/workflows/superset-python-unittest.yml:66-117`; `.github/workflows/superset-python-unittest-report.yml:3-21,34-69`). | There is a concrete event, evidence source, GitHub output surface, and privilege-separation precedent for the future CI trigger. |
 | Repository checkout | Frontend CI has eight Jest shards; backend integration has three service environments; E2E captures failure artifacts (`.github/workflows/superset-frontend.yml:76-104`; `.github/workflows/superset-python-integrationtest.yml:41-89,125-177,186-226`; `.github/workflows/superset-e2e.yml:53-309`). | Later adapters require suite-specific evidence and command selection. |
 | Repository checkout | A two-hour workflow adds and removes `requires:rebase` (`.github/workflows/label-merge-conflicts.yml:3-20,45-54`). | The rebase idea has an existing signal and UX, although the scheduled detector adds latency. |
 | Repository checkout | Release managers use labels and `cherrytree`; conflicts require a manual stop, fix, stage, continue, rerun, and push loop (`RELEASING/README.md:78-84,166-218`). | Backports contain real manual conflict work, but existing tooling already handles clean mechanical picks. |
@@ -96,7 +93,7 @@ engineering pain over novelty. Weighted totals are rounded to one decimal.
 | Deterministic verification and safety | 15% | 9.1 | 8.8 | 9.0 |
 | Five-minute demo and implementation feasibility | 15% | 8.3 | 8.0 | 7.0 |
 | **Weighted total** | **100%** | **9.1** | **8.8** | **8.2** |
-| **Decision** |  | **Build first** | Platform extension 1 | Platform extension 2 |
+| **Decision within these three** |  | **First future trigger** | Platform extension 2 | Platform extension 3 |
 
 The rebase idea has the strongest single conflict-reasoning task, but its
 semantic oracle is necessarily incomplete and safe publishing is socially and
@@ -418,7 +415,11 @@ middle—semantic applicability, dependencies, divergent-branch conflict, and
 test selection. Calling Devin for clean picks would add cost without unique
 value.
 
-## 5. Direct mapping to the take-home requirements
+## 5. Historical mapping to the take-home requirements
+
+The mapping below explains why CI rescue remains credible as an expansion. The
+current take-home maps the same requirements to a maintainer-authorized issue,
+one Devin session, a linked PR, and independent required checks.
 
 ### Part 2 — Build an Event-Driven Automation
 
@@ -446,7 +447,7 @@ value.
 
 ### Working-project deliverables
 
-| Required build/deliverable | Selected implementation mapping |
+| Required build/deliverable | Future CI-adapter mapping |
 |---|---|
 | Docker-based local workflow and replayable event | A containerized controller accepts a normalized, signed saved `workflow_run.completed` payload and uses a secretless sandbox for the exact pytest replay. |
 | Configured GitHub entry point | Production accepts a failed workflow/check event resolving to one open PR and immutable SHA; ambiguous events end `not_actionable`. |
@@ -463,7 +464,7 @@ value.
 | Metrics answer the definition of done | Report triage volume, reproduction rate, all five classifications, action acceptance/invocation, diagnosis/remediation latency, and API/sandbox cost per successful rescue. |
 | Five-minute presentation covers what/how/why/adoption | Section 8 shows the pain, event/evidence/session/repair loop, why Devin is necessary, and the success gates for keeping it enabled. |
 
-## 6. Recommended build scope and why it wins as a Cognition FDE demo
+## 6. Recommended future CI-trigger scope
 
 ### Pilot scope
 
@@ -500,10 +501,10 @@ produces visible red-to-green evidence. The GitHub Check provides value before
 permissions expand, while acceptance, latency, and cost determine whether the
 customer should keep the automation enabled.
 
-## 7. The other ideas as extensions of one platform
+## 7. These ideas as extensions of the selected platform
 
-The first build should establish reusable primitives rather than a CI-specific
-monolith:
+The issue-remediation build should establish reusable primitives rather than an
+issue-specific monolith:
 
 | Shared platform primitive | CI repair adapter | Rebase extension | Backport extension |
 |---|---|---|---|
@@ -532,7 +533,7 @@ failed checks prove the event-to-reasoning-to-verification loop, rebases add
 multi-version intent preservation, and backports add batch planning and release
 policy.
 
-## 8. Five-minute presentation and pilot success gates
+## 8. Future CI-extension presentation and pilot gates
 
 ### Presentation sequence
 

@@ -21,172 +21,197 @@ under the License.
 
 ## Objective
 
-Build and present a Dockerized, event-driven engineering automation that uses
-the Devin API to remove a recurring blocker from the Superset pull-request
-workflow.
+Build and present a working, event-driven automation that uses GitHub Actions
+and the Devin API to remediate a concrete GitHub issue in this Superset fork.
 
-The core take-home question is not only whether Devin can perform an impressive
-task. It is whether an engineering team would choose to keep the automation
-enabled after the demo.
+The core proof is:
 
-The selected automation should therefore:
+```text
+GitHub issue
+  -> maintainer authorization
+  -> Devin API session
+  -> repository-scale investigation and implementation
+  -> remediation pull request
+  -> independent repository CI
+  -> visible success or failure on the issue
+```
 
-1. start from a problem engineers already encounter frequently;
-2. appear in GitHub, where contributors and maintainers already work;
-3. produce useful read-only output before it receives write permission;
-4. use deterministic commands to establish failure and success;
-5. make the smallest reviewable change when remediation is authorized;
-6. measure whether engineers accept and reuse its output.
+The result should demonstrate:
 
-## Repository evidence
+1. **Working integration:** a real GitHub event creates and tracks a real Devin
+   session.
+2. **Engineering credibility:** authorization, idempotency, least privilege,
+   retry, timeout, cancellation, and deterministic verification.
+3. **Observable operation:** maintainers can see active status, terminal
+   outcome, failure reason, links, latency, and cost or explicit cost unknowns.
+4. **Customer value:** an issue moves from reported problem to a reviewable,
+   CI-verified code change without leaving GitHub.
 
-A 2026-09-08 GitHub API snapshot of `apache/superset` found:
+The [implementation document](09-github-issue-remediation-implementation.md)
+is the authoritative technical design.
 
-- 429 open pull requests;
-- 206 open pull requests older than 30 days;
-- 133 open pull requests older than 90 days;
-- a median open-pull-request age of 27 days;
-- 52 workflow definitions in `.github/workflows/`;
-- recent failed workflow runs across Python unit and integration tests,
-  frontend tests and lint, E2E, pre-commit, and Presto/Hive.
+## Why the trigger is an authorized issue
 
-The repository also has explicit reports of recurring CI instability, including
-[a recent flaky Jest failure](https://github.com/apache/superset/issues/43656)
-and the long-running
-[Presto/Hive flake ledger](https://github.com/apache/superset/issues/17750).
+The original take-home deliverable requires at least one successful
+issue-to-remediation path. An issue is also a strong workflow boundary:
 
-These signals do not prove that every old pull request is blocked by CI. They do
-show that pull-request throughput and failed-check diagnosis are broad,
-visible, recurring engineering workflows. That makes them stronger adoption
-targets than a narrow subsystem-specific guard.
+- it contains the user-visible problem and acceptance criteria;
+- maintainers already triage and prioritize it;
+- a label provides an explicit authorization event;
+- the resulting pull request can link and close it; and
+- GitHub exposes the complete issue, session, pull-request, review, and CI
+  lifecycle.
+
+The automation does not run on every public issue. A maintainer applies
+`devin:fix` after confirming that the issue is scoped and appropriate for
+automation. A trusted issue form or triage rule may apply the label
+automatically after the pilot earns trust.
 
 ## Required system loop
 
 ```text
-failed review-ready pull-request workflow event
-  -> controller validates and deduplicates delivery
-  -> controller rejects draft-origin, currently-draft, and stale-SHA runs
-  -> controller resolves pull request, immutable SHA, failed job, and artifacts
-  -> deterministic preflight selects and reruns the smallest relevant command
-  -> controller creates an investigator Devin session
-  -> Devin classifies and explains the reproduced failure
-  -> read-only diagnosis appears on the pull request
-  -> authorized remediation Devin session makes a bounded repair
-  -> the same command verifies the repair
-  -> metrics report time-to-diagnosis, time-to-green, acceptance, and cost
+issues.labeled(`devin:fix`)
+  -> dispatcher validates repository, issue, actor, and kill switch
+  -> dispatcher serializes and claims one issue generation
+  -> dispatcher creates one bounded Devin API session
+  -> issue comment and label show queued/running status
+  -> Devin investigates, changes code, tests, and opens a linked PR
+  -> scheduled reconciler polls the session and PR
+  -> required GitHub checks independently verify the change
+  -> issue shows succeeded, failed, blocked, timed-out, or cancelled
+  -> metrics report funnel, latency, quality, reliability, adoption, and ACU
 ```
 
-Devin must perform meaningful engineering work. It should not merely summarize
-raw CI output. The controller supplies the failed job, changed files, test
-artifacts, immutable SHA, and replay command. Devin connects that evidence to
-the repository, distinguishes change-caused failures from flakes or
-infrastructure failures, and proposes or implements the smallest safe repair.
-
-## Adoption hypothesis
-
-The pilot should earn trust in stages:
-
-| Stage | Automation behavior | Trust signal |
-|---|---|---|
-| Observe | Classify failed checks without writing code | Diagnoses are accurate and replayable |
-| Assist | Post a concise root cause and exact rerun command | Engineers act on the output |
-| Repair | Fix only after a label, command, or trusted-branch policy allows it | Proposed changes are accepted |
-| Expand | Handle repeated failure classes automatically | Teams keep the automation enabled |
+GitHub Actions owns event wiring, permissions, secrets, and scheduling. A small
+Python controller package owns validation, state transitions, API contracts,
+status rendering, and recovery. Devin owns repository-scale investigation and
+implementation. GitHub CI owns the success oracle.
 
 ## Deliverables
 
 ### Working project
 
-- Public automation repository with a Docker-based local workflow.
-- `workflow_run`/check webhook or replayable failed-run entry point.
-- Devin API session creation, polling, follow-up, and terminal-state handling.
-- Structured logs and lightweight metrics.
-- Runbook for local simulation without GitHub webhook infrastructure.
-- At least one successful failed-check-to-green path in this Superset fork.
+- GitHub Actions dispatcher for `issues.labeled`.
+- Scheduled and manually runnable reconciler.
+- Cancellation path for closed issues or revoked authorization.
+- Devin API session creation, status retrieval, recovery, and termination.
+- One updateable issue comment and mutually exclusive status label.
+- Docker-based local replay of saved issue, session, PR, and CI fixtures.
+- Structured run artifacts and an aggregate pilot report.
 
 ### Superset fork
 
-- One seeded pull request with a realistic failing unit test or lint check.
-- A structured diagnosis tied to the failed job, test, and changed files.
-- An authorized repair created by the automation or its managed Devin session.
-- Evidence that the same scoped command fails before and passes after.
+- One honest, narrowly scoped issue with reproducible acceptance criteria.
+- One Devin-managed remediation pull request linked with `Fixes #<issue>`.
+- Evidence that the relevant check fails before and passes after the repair.
+- One visible non-success path such as cancellation, timeout, or failed CI.
+- No direct write to the protected default branch.
 
 ### Five-minute presentation
 
-- **What:** too many pull requests lose time waiting for failed-check diagnosis.
-- **How:** failed event, evidence extraction, scoped replay, Devin diagnosis,
-  opt-in repair, and deterministic verification.
-- **Why Devin:** it reasons across the diff, logs, tests, and code rather than
-  only routing a known error string.
-- **Why adoption:** it meets engineers in GitHub, begins read-only, and proves
-  value before requesting broader permissions.
+- **Problem:** an accepted issue still requires investigation, implementation,
+  test selection, and a reviewable pull request.
+- **Event:** a maintainer adds `devin:fix`.
+- **Devin work:** investigate the issue, implement the smallest scoped repair,
+  run relevant checks, and open a pull request.
+- **Proof:** normal GitHub CI independently passes on the remediation PR.
+- **Operations:** the issue shows active status, links, terminal outcome,
+  failure reason, latency, and ACU or explicit cost unknowns.
+
+## Safety boundary
+
+- Public issue content is untrusted task data.
+- Label authorization and live repository permission are required.
+- One issue has at most one nonterminal remediation generation.
+- The Actions token and Devin API key never enter the Devin session.
+- Devin receives no organization secret by default.
+- Devin may create a branch and pull request, but may not merge or bypass
+  protection.
+- The reconciler validates the returned PR repository, base branch, head,
+  issue link, and required checks.
+- Devin self-reported completion is never sufficient for success.
+- Closing the issue or removing authorization cancels active work.
+- A repository variable provides an immediate dispatch kill switch.
+
+## Observability requirements
+
+Every run exposes:
+
+- issue, generation, run key, Actions run, Devin session, PR, and head SHA;
+- phase, transition version, last update, attempt count, and elapsed time;
+- active, blocked, cancelling, or terminal status;
+- terminal outcome and bounded failure reason;
+- required-check pass, fail, pending, and missing counts;
+- API and reconciliation failures;
+- duplicate suppression and cancellation history;
+- ACU when available and an explicit unknown when unavailable; and
+- a redacted machine-readable transition artifact.
+
+The pilot report must answer:
+
+- How many issues were authorized?
+- How many created sessions?
+- How many sessions created PRs?
+- How many PRs passed required CI?
+- How many were merged?
+- How many were rejected, duplicated, blocked, failed, timed out, or cancelled?
+- How long did issue-to-session, issue-to-PR, and issue-to-green take?
+- How much ACU did each CI-green and merged remediation consume?
 
 ## Evaluation rubric
 
 | Dimension | Evidence of a strong submission |
 |---|---|
-| Adoption likelihood | Fits an existing workflow, earns trust gradually, and requires little behavior change |
-| Problem selection | Frequent, visible, expensive, and supported by repository evidence |
-| Devin leverage | Devin owns investigation and remediation, not just prose |
-| Technical design | Idempotency, retries, timeouts, scoped access, state model |
-| Safety | Deterministic gate, bounded prompts, no speculative findings |
-| Observability | Diagnosis accuracy, latency, acceptance, time-to-green, cost |
-| Demo quality | Crisp red-check-to-green-check story with visible proof |
+| Working automation | Real GitHub event, real API call, real session, real PR |
+| Devin leverage | Devin investigates and implements rather than routing text |
+| Deterministic proof | Repository CI independently verifies the remediation |
+| Safety | Authorization, least privilege, protected branch, cancellation |
+| Reliability | Idempotency, retry, timeout, restart recovery, kill switch |
+| Observability | Current status, terminal reason, links, latency, outcomes, ACU |
+| Demo clarity | One visible issue-to-green-PR path and one non-success path |
+| Adoption | Maintainers can use it without leaving GitHub |
 
 ## Definition of done
 
-- One event can be replayed locally and through the configured integration.
-- Duplicate deliveries do not start duplicate sessions.
-- Every Devin session is correlated to repository, pull request, head SHA,
-  workflow run, failed job, and rerun command.
-- Failure, timeout, cancellation, and malformed-output states are visible.
-- A failed check produces a useful diagnosis even when remediation is disabled.
-- A trusted or explicitly authorized remediation passes the same scoped command
-  that reproduced the failure.
-- Untrusted fork pull requests remain read-only unless a maintainer explicitly
-  authorizes a safe companion workflow.
-- The metrics view answers:
-  - How many failed runs were triaged?
-  - How many failures were reproduced?
-  - How many were change-caused, flaky, infrastructure-related, or unresolved?
-  - How often did engineers accept or invoke the suggested action?
-  - How long did diagnosis and remediation take?
-  - What did each successful rescue cost?
+- A maintainer can apply `devin:fix` to a real issue.
+- Exactly one Devin session is created for one issue generation.
+- The issue displays queued or active status within two minutes.
+- A scheduled reconciler resumes after disposable Actions jobs exit.
+- The managed session opens one linked remediation PR.
+- Required GitHub checks decide whether the automation succeeded.
+- Failure, blocked, timeout, cancellation, and duplicate states are visible.
+- Duplicate delivery does not create another session, comment, or PR.
+- The automation can be disabled without changing code.
+- A saved event can replay locally through Docker without credentials.
+- The aggregate report shows funnel, latency, reliability, quality, adoption,
+  and ACU or explicit cost unknowns.
 
-## Fast implementation sequence
+## Implementation sequence
 
-This is a compact four-step build sequence, not a four-day estimate. The
-intentionally narrow failure fixture, scoped replay command, and opt-in write
-path make it suitable for rapid implementation and demonstration.
+### Step 1 — deterministic controller
 
-### Step 1 — define the failure contract
+- Add typed issue, session, PR, check, and state models.
+- Implement dispatch, reconcile, cancel, and status rendering with fake
+  adapters.
+- Prove duplicate, blocked, timeout, failed-CI, and cancellation fixtures.
 
-- Add one fork-local pull request with a realistic failing unit test or lint
-  check.
-- Normalize a saved failed workflow payload, job log, and test artifact.
-- Emit a structured result containing the pull request, SHA, workflow, job,
-  fingerprint, replay command, duration, and outcome.
+### Step 2 — live GitHub and Devin integration
 
-### Step 2 — build the event controller
+- Add pinned GitHub Actions workflows.
+- Add live API adapters and secret configuration.
+- Publish one updateable issue comment and status label.
+- Keep dry-run mode enabled by default.
 
-- Add the Dockerized webhook/replay entry point and SQLite run state.
-- Resolve the pull request and deduplicate by workflow run, job, and head SHA.
-- Use changed paths and job metadata to select the smallest relevant repository
-  command.
-- Start Devin only after collecting actionable evidence.
+### Step 3 — controlled remediation
 
-### Step 3 — manage investigation and remediation
+- Configure the reviewed issue-remediation playbook.
+- Enable branch and PR creation through Devin's repository integration.
+- Validate the returned PR and monitor required CI.
+- Demonstrate one issue-to-green-PR path.
 
-- Create bounded investigator and opt-in remediation session contracts.
-- Poll sessions, validate structured output, and expose terminal states.
-- Post a concise diagnosis and replay command to the pull request.
-- Require a trusted branch, label, or maintainer command before writing code.
-- Re-run the same scoped command against the proposed change.
+### Step 4 — observability and rollout
 
-### Step 4 — prove and present the loop
-
-- Exercise success, failure, duplicate-event, malformed-output, and timeout
-  paths.
-- Publish triage volume, reproduction rate, classification, acceptance,
-  time-to-green, and cost metrics.
-- Finalize the README, runbook, architecture, and five-minute demo.
+- Publish the daily pilot report.
+- Exercise success, failure, duplicate, blocked, timeout, and cancellation.
+- Record SLOs, alerts, kill-switch operation, and the production-controller
+  expansion criteria.

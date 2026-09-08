@@ -17,9 +17,18 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# PR CI Rescue Product Implementation Design
+# Future Extension: PR CI Rescue Product Implementation Design
 
-## 1. Decision
+## Document role
+
+The selected first implementation is the
+[GitHub Issue Remediation Runner](09-github-issue-remediation-implementation.md).
+This design is retained as a hardened future adapter for automatic
+pull-request CI repair. It preserves the stronger delivery, attempt,
+failure-claim, isolated-source, lost-response, and publishing contracts added
+after the original CI-rescue review.
+
+## 1. Future CI-rescue decision
 
 Implement PR CI Rescue as a small standalone Python service under
 `takehome/ci_rescue/`, not inside the Superset Flask application.

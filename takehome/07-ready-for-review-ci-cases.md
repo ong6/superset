@@ -17,7 +17,15 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Ready-for-Review CI Rescue Test Cases
+# Future CI-Rescue Extension: Ready-for-Review Test Cases
+
+## Document role
+
+These cases remain the required safety boundary when failed pull-request CI is
+added as an automatic trigger. They do not define the selected first
+implementation. The initial product is the
+[GitHub Issue Remediation Runner](09-github-issue-remediation-implementation.md),
+which starts only after a maintainer applies `devin:fix` to an open issue.
 
 ## Product invariant
 
