@@ -423,7 +423,7 @@ one Devin session, a linked PR, and independent required checks.
 
 ### Part 2 — Build an Event-Driven Automation
 
-| Requirement | Selected implementation mapping |
+| Requirement | Future CI-adapter mapping |
 |---|---|
 | Be triggered by an event | Production accepts a completed failed GitHub workflow/check event resolving to one open PR and immutable SHA. A normalized saved payload provides deterministic local replay. |
 | Programmatically initiate Devin sessions | After deterministic evidence collection, the controller calls `POST /v1/sessions` with a bounded prompt, structured-output schema, tags, selected knowledge, and an ACU limit. Publisher credentials remain in the controller. It persists the returned session ID before waiting. |
@@ -435,7 +435,7 @@ one Devin session, a linked PR, and independent required checks.
 
 ### Part 3 — Incorporate Observability
 
-| Requirement | Selected implementation mapping |
+| Requirement | Future CI-adapter mapping |
 |---|---|
 | Status of active and completed tasks | The run record exposes fixed active stages from `received` through replay, investigation, authorization, remediation, and verification, plus explicit terminal outcomes and timestamps. |
 | Success and failure signals | Success requires controller-owned fail-before/pass-after evidence. Rejection, duplicate, unresolved diagnosis, replay failure, timeout, cancellation, malformed output, policy violation, stale SHA, verification failure, and publish failure remain distinct terminal reasons. |

@@ -46,8 +46,8 @@ The service is a modular monolith with:
 - PostgreSQL and live GitHub/Devin adapters behind the same interfaces; and
 - isolated replay and verification sandboxes owned by the controller.
 
-The first implementation pull request should deliver an **offline vertical
-slice through read-only diagnosis**. It should prove event validation,
+The first CI-extension pull request should deliver an **offline vertical slice
+through read-only diagnosis**. It should prove event validation,
 idempotency, immutable correlation, exact pytest-node selection, state
 transitions, a bounded fake Devin contract, structured-output validation, and
 one updateable fake Check. It should not wait for live credentials or attempt
@@ -104,11 +104,11 @@ access, or a mutable pull request. The fake adapters are therefore product
 components, not throwaway mocks: they power fixtures, demos, failure injection,
 and contract tests.
 
-## 3. First implementation pull request
+## 3. First CI-extension pull request
 
 ### Included
 
-The first implementation pull request accepts one saved normalized
+The first CI-extension pull request accepts one saved normalized
 workflow-attempt envelope plus a fixture `Event File` representing:
 
 - the configured `ong6/superset` repository;
@@ -166,7 +166,7 @@ identity creates a new attempt that attaches to the existing run.
 - no Docker-in-Docker sandbox; and
 - no broad Python-unit log parser.
 
-These exclusions make the first implementation pull request deterministic and
+These exclusions make the first CI-extension pull request deterministic and
 reviewable while preserving the real interfaces.
 
 ## 4. Proposed repository layout
@@ -509,7 +509,7 @@ class Sandbox(Protocol):
     def verify(self, request: VerificationRequest) -> VerificationResult: ...
 ```
 
-The protocols should be synchronous in the first implementation. HTTP and
+The protocols should be synchronous in the first CI-extension slice. HTTP and
 subprocess adapters may use internal async clients later, but making the domain
 service async before there is concurrent work would complicate fixture tests
 without changing behavior.
@@ -1207,7 +1207,7 @@ chat transcript.
 |---|---|
 | Product code location was unspecified. | Standalone `takehome/ci_rescue` package. |
 | Production ownership was implicit. | Pilot code stays here; live production operation moves to a separately owned repository and deployment boundary. |
-| First implementation scope was too broad. | Offline diagnosis vertical slice, then live diagnosis, then repair. |
+| First CI-extension scope was too broad. | Offline diagnosis vertical slice, then live diagnosis, then repair. |
 | Failure identity was claimed before evidence existed. | Claim delivery/attempt at intake; claim the canonical failure only after deterministic evidence normalization. |
 | Draft-at-source state was unavailable during webhook intake. | Claim the attempt first, parse the quarantined `Event File`, refresh live PR state, then evaluate R1-R10 eligibility. |
 | `patch_ref` ownership was unspecified. | Bounded inline unified diff, persisted by the controller. |
