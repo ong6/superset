@@ -34,9 +34,9 @@ pytest -q 'tests/unit_tests/utils/test_report_execution.py::test_report_executio
 
 ## Expected
 
-The equality boundary is rejected and the `Python-Unit` check passes.
+The equality boundary is rejected and the `unit-tests (current)` check passes.
 
-CI check: `Python-Unit`
+CI check: `unit-tests (current)`
 
 ## Allowed paths
 

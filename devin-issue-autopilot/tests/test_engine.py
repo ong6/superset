@@ -54,7 +54,7 @@ def issue(number: int = 1, allowed: str = "superset/example.py") -> Issue:
         title="Repair fixture",
         body=(
             "## Symptom\nFailure\n\n"
-            "## Expected\nCI check: `Python-Unit`\n\n"
+            "## Expected\nCI check: `unit-tests (current)`\n\n"
             f"## Allowed paths\n- `{allowed}`\n\n"
             "## Acceptance command\npytest -q fixture"
         ),
@@ -92,7 +92,7 @@ def triage_snapshot(labels: list[str] | None = None) -> dict[str, object]:
             "labels": labels or ["devin-triage-bug"],
             "allowed_paths": ["superset/utils"],
             "acceptance_command": "pytest -q tests/unit_tests/utils",
-            "ci_check": "Python-Unit",
+            "ci_check": "unit-tests (current)",
         },
     }
 
@@ -557,7 +557,7 @@ def test_unapproved_check_never_starts_session(tmp_path: Path) -> None:
         tmp_path,
         [exit_snapshot("https://github.com/ong6/superset/pull/10")],
     )
-    item.body = item.body.replace("Python-Unit", "Unrelated green check")
+    item.body = item.body.replace("unit-tests (current)", "Unrelated green check")
 
     run = engine.run_issue(item, sleep=lambda _: None)
 
@@ -703,7 +703,7 @@ def test_named_commit_status_is_supported() -> None:
                 200,
                 json={
                     "statuses": [
-                        {"context": "Python-Unit", "state": "success"},
+                        {"context": "unit-tests (current)", "state": "success"},
                     ]
                 },
             )
@@ -714,7 +714,33 @@ def test_named_commit_status_is_supported() -> None:
         httpx.MockTransport(handler),
     )
 
-    assert github.check("a" * 40, "Python-Unit") == ("completed", "success")
+    assert github.check("a" * 40, "unit-tests (current)") == ("completed", "success")
+
+
+def test_default_ci_check_matches_github_check_run() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(
+                200,
+                json={
+                    "check_runs": [
+                        {
+                            "name": "unit-tests (current)",
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    settings = Settings("devin", "org", "github")
+    github = GitHubClient(settings, httpx.MockTransport(handler))
+
+    assert github.check("a" * 40, settings.allowed_checks[0]) == (
+        "completed",
+        "success",
+    )
 
 
 def test_bot_triage_contract_is_used_for_maintainer_authorized_fix() -> None:
@@ -724,7 +750,7 @@ def test_bot_triage_contract_is_used_for_maintainer_authorized_fix() -> None:
                 {
                     "allowed_paths": ["superset/utils"],
                     "acceptance_command": "pytest -q tests/unit_tests/utils",
-                    "ci_check": "Python-Unit",
+                    "ci_check": "unit-tests (current)",
                 }
             ).encode()
         )
@@ -770,7 +796,7 @@ def test_bot_triage_contract_is_used_for_maintainer_authorized_fix() -> None:
 
     assert item.allowed_paths == ["superset/utils"]
     assert item.acceptance_command == "pytest -q tests/unit_tests/utils"
-    assert item.check_name == "Python-Unit"
+    assert item.check_name == "unit-tests (current)"
     assert item.section("Symptom") == "Plain issue body"
 
 

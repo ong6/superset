@@ -44,7 +44,7 @@ class Issue(BaseModel):
     @property
     def check_name(self) -> str:
         match = re.search(r"(?im)^CI check:\s*`?([^`\n]+)`?", self.body)
-        return match.group(1).strip() if match else "Python-Unit"
+        return match.group(1).strip() if match else "unit-tests (current)"
 
     @property
     def acceptance_command(self) -> str:
@@ -164,7 +164,7 @@ class Settings:
     db_path: Path = Path("autopilot.db")
     daily_acu_cap: float = 20
     triage_acu_limit: int = 1
-    allowed_checks: tuple[str, ...] = ("Python-Unit", "Check OpenAPI spec drift")
+    allowed_checks: tuple[str, ...] = ("unit-tests (current)", "check-openapi-spec-drift")
     triage_labels: tuple[str, ...] = (
         "devin-triage-bug",
         "devin-triage-feature",
@@ -220,7 +220,7 @@ class Settings:
                 check.strip()
                 for check in os.getenv(
                     "AUTOPILOT_ALLOWED_CHECKS",
-                    "Python-Unit,Check OpenAPI spec drift",
+                    "unit-tests (current),check-openapi-spec-drift",
                 ).split(",")
                 if check.strip()
             ),

@@ -39,7 +39,7 @@ git diff --exit-code -- docs/static/resources/openapi.json
 
 The generated OpenAPI artifact matches the dashboard schema and the drift check passes.
 
-CI check: `Check OpenAPI spec drift`
+CI check: `check-openapi-spec-drift`
 
 ## Allowed paths
 

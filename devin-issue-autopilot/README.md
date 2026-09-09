@@ -154,7 +154,7 @@ Acceptance command
 ```
 
 Add `CI check: <name>` under Expected when verification should wait for a check
-other than `Python-Unit`. Checks must be present in
+other than `unit-tests (current)`. Checks must be present in
 `AUTOPILOT_ALLOWED_CHECKS`. The acceptance section must contain one command
 without shell operators and begin with an allowed tool. When an incoming issue
 has no contract, triage proposes narrow allowed paths, an acceptance command,
