@@ -27,7 +27,10 @@
         "note": "Invalid contracts, missing PRs, stale SHA, and failed CI stop."
       }
     ],
-    "viewBox": [1120, 680]
+    "viewBox": [1120, 680],
+    "legend": {
+      "mode": "hidden"
+    }
   },
   "lanes": [
     {
