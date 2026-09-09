@@ -38,39 +38,39 @@
   "lanes": [
     {
       "id": "github",
-      "label": "GitHub + Maintainer"
+      "label": "GitHub"
     },
     {
       "id": "controller",
-      "label": "Autopilot Controller"
+      "label": "Controller"
     },
     {
       "id": "devin",
-      "label": "Bounded Devin Sessions"
+      "label": "Devin"
     },
     {
       "id": "evidence",
-      "label": "Stops + Evidence",
+      "label": "Outcomes",
       "variant": "exception"
     }
   ],
   "phases": [
     {
       "id": "intake",
-      "label": "Intake + triage",
+      "label": "Triage",
       "fromCol": 0,
       "toCol": 2
     },
     {
       "id": "authorize",
-      "label": "Authorize + claim",
+      "label": "Authorization",
       "fromCol": 3,
       "toCol": 3,
       "variant": "security"
     },
     {
       "id": "remediate",
-      "label": "Repair + prove",
+      "label": "Repair + proof",
       "fromCol": 4,
       "toCol": 5,
       "variant": "emphasis"
@@ -79,7 +79,7 @@
   "groups": [
     {
       "id": "session_boundary",
-      "label": "No repository secrets",
+      "label": "No repo secrets",
       "lane": "devin",
       "fromCol": 2,
       "toCol": 4,
@@ -142,7 +142,7 @@
       "lane": "controller",
       "col": 3,
       "type": "security",
-      "label": "Authorize + Claim",
+      "label": "Authorize Claim",
       "width": 136,
       "yOffset": 18
     },
