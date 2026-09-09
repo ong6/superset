@@ -165,6 +165,7 @@ class DevinClient:
                 "repos": [self.repo],
                 "tags": [
                     "autopilot",
+                    "role:remediation",
                     f"issue:{issue.number}",
                     f"run:{run.run_id}",
                 ],
@@ -190,6 +191,7 @@ class DevinClient:
                 "tags": [
                     "autopilot",
                     "triage",
+                    "role:triage",
                     f"issue:{issue.number}",
                     f"run:{run.run_id}",
                 ],
@@ -263,12 +265,14 @@ class GitHubClient:
             f"/repos/{self.repo}/issues/{number}/events", params={"per_page": 100}
         )
         events.raise_for_status()
+        active_labels = {label.name for label in data.labels}
         labels = [
             event
             for event in (GitHubEvent.model_validate(item) for item in events.json())
             if event.event == "labeled"
             and event.label is not None
             and event.label.name in {"devin-fix", "devin-retry"}
+            and event.label.name in active_labels
         ]
         if not labels:
             raise ValueError(f"Issue #{number} has no Devin label event")
@@ -457,9 +461,21 @@ class GitHubClient:
                 return "completed", status.state
         return "queued", None
 
-    def conclude(self, issue: int, key: str, body: str, outcome: str) -> str:
-        marker = f"<!-- devin-issue-autopilot:{sha256(key.encode()).hexdigest()[:16]} -->"
-        marked_body = f"{marker}\n{body}"
+    @staticmethod
+    def _request_marker(key: str) -> str:
+        digest = sha256(key.encode()).hexdigest()[:16]
+        prefix = "devin-triage-request" if ":triage:" in key else "devin-issue-autopilot"
+        return f"<!-- {prefix}:{digest} -->"
+
+    def _upsert_comment(
+        self,
+        issue: int,
+        key: str,
+        body: str,
+        preserve_contract: bool = True,
+        include_request_marker: bool = True,
+    ) -> str:
+        marker = f"<!-- devin-issue-autopilot:{issue} -->"
         comments = self._comments(issue)
         existing = next(
             (
@@ -467,10 +483,50 @@ class GitHubClient:
                 for comment in comments
                 if comment.user is not None
                 and comment.user.login == "github-actions[bot]"
-                and marker in comment.body
+                and (
+                    marker in comment.body
+                    or re.search(
+                        r"<!-- devin-issue-triage:[0-9a-f]{16} -->",
+                        comment.body,
+                    )
+                    is not None
+                )
             ),
             None,
         )
+        if existing is None:
+            request_marker = self._request_marker(key)
+            existing = next(
+                (
+                    comment
+                    for comment in comments
+                    if comment.user is not None
+                    and comment.user.login == "github-actions[bot]"
+                    and request_marker in comment.body
+                ),
+                None,
+            )
+        previous_body = existing.body if existing is not None else ""
+        request_pattern = r"<!-- (?:devin-triage-request|devin-issue-autopilot):[0-9a-f]{16} -->"
+        request_markers = re.findall(request_pattern, previous_body) + re.findall(
+            request_pattern, body
+        )
+        if include_request_marker:
+            request_markers.append(self._request_marker(key))
+        request_markers = list(dict.fromkeys(request_markers))[-500:]
+        contract_pattern = r"<!-- devin-triage-contract:[A-Za-z0-9_-]+ -->"
+        contract_match = re.search(contract_pattern, body)
+        if contract_match is None and preserve_contract:
+            contract_match = re.search(contract_pattern, previous_body)
+        clean_body = re.sub(
+            rf"(?:{re.escape(marker)}|{request_pattern}|{contract_pattern})\n?",
+            "",
+            body,
+        ).strip()
+        metadata = [marker, *request_markers]
+        if contract_match is not None:
+            metadata.append(contract_match.group(0))
+        marked_body = "\n".join([*metadata, clean_body])
         if existing is None:
             response = self.client.post(
                 f"/repos/{self.repo}/issues/{issue}/comments",
@@ -485,9 +541,23 @@ class GitHubClient:
             )
             response.raise_for_status()
             comment_id = str(existing.id)
+        return comment_id
+
+    def progress(self, issue: int, key: str, body: str) -> str:
+        """Create or update the issue's durable automation comment."""
+
+        return self._upsert_comment(
+            issue,
+            key,
+            body,
+            include_request_marker=False,
+        )
+
+    def conclude(self, issue: int, key: str, body: str, outcome: str) -> str:
+        comment_id = self._upsert_comment(issue, key, body)
         label = "devin-verified" if outcome == "verified" else "devin-needs-human"
         other_label = "devin-needs-human" if label == "devin-verified" else "devin-verified"
-        for removable in (other_label, "devin-fix", "devin-retry"):
+        for removable in (other_label, "devin-fix", "devin-retry", "devin-candidate"):
             removed = self.client.delete(f"/repos/{self.repo}/issues/{issue}/labels/{removable}")
             if removed.status_code != 404:
                 removed.raise_for_status()
@@ -500,43 +570,7 @@ class GitHubClient:
     def conclude_triage(self, issue: int, key: str, body: str, labels: list[str]) -> str:
         """Upsert the issue's triage brief and reconcile triage labels."""
 
-        marker_key = f"{self.repo}:{issue}"
-        marker = f"<!-- devin-issue-triage:{sha256(marker_key.encode()).hexdigest()[:16]} -->"
-        comments = self._comments(issue)
-        existing = next(
-            (
-                comment
-                for comment in comments
-                if comment.user is not None
-                and comment.user.login == "github-actions[bot]"
-                and marker in comment.body
-            ),
-            None,
-        )
-        request_pattern = r"<!-- devin-triage-request:[0-9a-f]{16} -->"
-        previous_body = existing.body if existing is not None else ""
-        request_markers = list(
-            dict.fromkeys(
-                re.findall(request_pattern, previous_body) + re.findall(request_pattern, body)
-            )
-        )[-500:]
-        brief = re.sub(rf"{request_pattern}\n?", "", body)
-        history = "\n".join(request_markers)
-        marked_body = f"{marker}\n{history}\n{brief}" if history else f"{marker}\n{brief}"
-        if existing is None:
-            response = self.client.post(
-                f"/repos/{self.repo}/issues/{issue}/comments",
-                json={"body": marked_body},
-            )
-            response.raise_for_status()
-            comment_id = str(GitHubComment.model_validate(response.json()).id)
-        else:
-            response = self.client.patch(
-                f"/repos/{self.repo}/issues/comments/{existing.id}",
-                json={"body": marked_body},
-            )
-            response.raise_for_status()
-            comment_id = str(existing.id)
+        comment_id = self._upsert_comment(issue, key, body, preserve_contract=False)
         for removable in (
             "devin-triage-bug",
             "devin-triage-feature",
@@ -546,6 +580,8 @@ class GitHubClient:
             "devin-triage-other",
             "devin-needs-info",
             "devin-needs-maintainer",
+            "devin-candidate",
+            "devin-triage",
             "devin-verified",
             "devin-needs-human",
         ):
@@ -688,9 +724,9 @@ class FakeGitHub:
         return check
 
     def conclude(self, issue: int, key: str, body: str, outcome: str) -> str:
-        existing = next((item for item in self.comments if item["key"] == key), None)
+        existing = next((item for item in self.comments if item["issue"] == issue), None)
         if existing is not None:
-            existing.update(body=body, outcome=outcome)
+            existing.update(key=key, body=body, outcome=outcome)
             return str(existing["id"])
         comment_id = str(len(self.comments) + 1)
         self.comments.append(
@@ -704,17 +740,30 @@ class FakeGitHub:
         )
         return comment_id
 
+    def progress(self, issue: int, key: str, body: str) -> str:
+        existing = next((item for item in self.comments if item["issue"] == issue), None)
+        if existing is not None:
+            existing.update(key=key, body=body, outcome="pending")
+            return str(existing["id"])
+        comment_id = str(len(self.comments) + 1)
+        self.comments.append(
+            {
+                "id": comment_id,
+                "issue": issue,
+                "key": key,
+                "body": body,
+                "outcome": "pending",
+            }
+        )
+        return comment_id
+
     def conclude_triage(self, issue: int, key: str, body: str, labels: list[str]) -> str:
         existing = next(
-            (
-                item
-                for item in self.comments
-                if item["issue"] == issue and item["outcome"] == "triaged"
-            ),
+            (item for item in self.comments if item["issue"] == issue),
             None,
         )
         if existing is not None:
-            existing.update(body=body, outcome="triaged", labels=labels)
+            existing.update(key=key, body=body, outcome="triaged", labels=labels)
             return str(existing["id"])
         comment_id = str(len(self.comments) + 1)
         self.comments.append(

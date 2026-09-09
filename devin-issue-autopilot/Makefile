@@ -13,13 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: up once report simulate test
+.PHONY: up once triage report simulate test
 
 up:
 	docker compose up --build
 
 once:
 	docker compose run --rm watch python -m autopilot once --issue $(ISSUE)
+
+triage:
+	docker compose run --rm watch python -m autopilot triage --issue $(ISSUE)
 
 report:
 	docker compose --profile report run --rm report

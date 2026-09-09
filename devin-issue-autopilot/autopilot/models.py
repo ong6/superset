@@ -82,6 +82,8 @@ class TriageResult(BaseModel):
     allowed_paths: list[str] = Field(max_length=20)
     acceptance_command: str = Field(max_length=500)
     ci_check: str = Field(max_length=100)
+    missing_information: list[str] = Field(default_factory=list, max_length=10)
+    risk_notes: list[str] = Field(default_factory=list, max_length=10)
 
 
 class SessionCreate(BaseModel):
@@ -135,6 +137,7 @@ class Run(BaseModel):
     outcome: str | None = None
     ci: str | None = None
     comment_id: str | None = None
+    structured_output: str = ""
     verification_started: float | None = None
     pr_opened: float | None = None
     target_branch: str | None = None
@@ -196,13 +199,17 @@ class Settings:
             raise ValueError("AUTOPILOT_TRIAGE_LABELS must include every managed triage label")
 
     @classmethod
-    def from_env(cls, fake: bool = False) -> "Settings":
-        required = ("DEVIN_API_KEY", "DEVIN_ORG_ID", "GITHUB_TOKEN")
+    def from_env(
+        cls,
+        fake: bool = False,
+        devin_key_env: str = "DEVIN_API_KEY",
+    ) -> "Settings":
+        required = (devin_key_env, "DEVIN_ORG_ID", "GITHUB_TOKEN")
         missing = [name for name in required if not os.getenv(name)]
         if missing and not fake:
             raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
         return cls(
-            devin_api_key=os.getenv("DEVIN_API_KEY", ""),
+            devin_api_key=os.getenv(devin_key_env, ""),
             devin_org_id=os.getenv("DEVIN_ORG_ID", ""),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             github_repo=os.getenv("GITHUB_REPO", "ong6/superset"),
@@ -289,6 +296,16 @@ def triage_output_schema() -> dict[str, object]:
             },
             "acceptance_command": {"type": "string", "maxLength": 500},
             "ci_check": {"type": "string", "maxLength": 100},
+            "missing_information": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {"type": "string", "maxLength": 300},
+            },
+            "risk_notes": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {"type": "string", "maxLength": 300},
+            },
         },
         "required": [
             "outcome",
@@ -300,5 +317,7 @@ def triage_output_schema() -> dict[str, object]:
             "allowed_paths",
             "acceptance_command",
             "ci_check",
+            "missing_information",
+            "risk_notes",
         ],
     }

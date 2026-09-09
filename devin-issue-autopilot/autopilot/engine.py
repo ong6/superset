@@ -83,6 +83,7 @@ class GitHubAdapter(Protocol):
     def resolve_pr(self, url: str) -> PullRequest: ...
     def pr_files(self, url: str) -> list[str]: ...
     def check(self, sha: str, name: str) -> tuple[str, str | None]: ...
+    def progress(self, issue: int, key: str, body: str) -> str: ...
     def conclude(self, issue: int, key: str, body: str, outcome: str) -> str: ...
     def conclude_triage(self, issue: int, key: str, body: str, labels: list[str]) -> str: ...
 
@@ -95,12 +96,14 @@ class Engine:
         devin: DevinAdapter,
         github: GitHubAdapter,
         clock: Callable[[], float] = time.time,
+        triage_devin: DevinAdapter | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.devin = devin
         self.github = github
         self.clock = clock
+        self.triage_devin = triage_devin
 
     def claim(self, issue: Issue) -> Run:
         return self.store.claim(issue, self.clock())
@@ -138,7 +141,8 @@ class Engine:
             "proposed, return empty allowed_paths and acceptance_command with needs_info "
             "or needs_maintainer. Return only the required structured output. Choose one "
             "category, a short "
-            "maintainer-facing summary, and the next action. Labels must be selected "
+            "maintainer-facing summary, missing information, risk notes, and the next "
+            "action. Labels must be selected "
             f"only from this allowlist: {labels}. Security-looking reports must be "
             "classified for maintainer review, not automatic fixing."
         )
@@ -186,6 +190,7 @@ class Engine:
         run, acquired = self.store.begin_start(run, self.clock())
         if not acquired:
             return run
+        run = self._progress(run, "Checking remediation contract")
         if contract_error := self._contract_error(run.issue_model):
             return self._finish(run, "policy_rejected", note=contract_error)
         if not self.github.labeler_authorized(run.issue_model):
@@ -204,14 +209,16 @@ class Engine:
             target_sha=target.sha,
             updated=self.clock(),
         )
+        run = self._progress(run, "Creating bounded remediation session")
         result = self.devin.create(run.issue_model, run, self.prompt(run.issue_model, target))
-        return self.store.transition(
+        run = self.store.transition(
             run,
             "session_running",
             now=self.clock(),
             session_id=result.session_id,
             session_url=result.url,
         )
+        return self._progress(run, "Investigating and implementing bounded fix")
 
     def _poll(self, run: Run) -> Run:
         assert run.session_id is not None
@@ -233,12 +240,14 @@ class Engine:
             return run
         if status == "running" and detail == "waiting_for_user" and run.nudges == 0:
             self.devin.nudge(session_id)
-            return self.store.update(run.run_id, nudges=1, updated=self.clock())
+            run = self.store.update(run.run_id, nudges=1, updated=self.clock())
+            return self._progress(run, "Needs input; sent one bounded nudge")
         if status == "running" and detail == "waiting_for_approval":
             return self._finish(run, "blocked", note="waiting for approval")
         if status == "running" and self.clock() - run.created > 2400:
             self.devin.delete(session_id)
-            return self.store.transition(run, "cancelling", now=self.clock())
+            run = self.store.transition(run, "cancelling", now=self.clock())
+            return self._progress(run, "Cancelling after wall-clock limit")
         if status in {"new", "claimed", "running", "resuming"}:
             return run
         if status == "suspended":
@@ -254,33 +263,50 @@ class Engine:
             raise ValueError("missing structured output")
         if not isinstance(output, StructuredResult):
             return self._finish(run, "policy_rejected", note="unexpected structured output")
-        run = self.store.update(run.run_id, summary=output.root_cause, updated=self.clock())
+        run = self.store.update(
+            run.run_id,
+            summary=output.root_cause,
+            structured_output=output.model_dump_json(),
+            updated=self.clock(),
+        )
         if output.outcome == "blocked":
-            return self._finish(run, "blocked")
+            return self._finish(run, "blocked", result=output)
         if output.outcome == "no_change":
             if output.pr_url or output.files_changed or snapshot.pull_requests:
                 return self._finish(
                     run,
                     "policy_rejected",
                     note="no_change output includes proposed changes",
+                    result=output,
                 )
-            return self._finish(run, "no_change")
+            return self._finish(run, "no_change", result=output)
         if len(snapshot.pull_requests) != 1:
             return self._finish(
                 run,
                 "policy_rejected",
                 note="expected exactly one pull request",
+                result=output,
             )
         pr_url = snapshot.pull_requests[0].pr_url
         if not pr_url:
-            return self._finish(run, "no_pr")
+            return self._finish(run, "no_pr", result=output)
         if output.pr_url != pr_url:
-            return self._finish(run, "policy_rejected", note="structured PR URL mismatch")
+            return self._finish(
+                run,
+                "policy_rejected",
+                note="structured PR URL mismatch",
+                result=output,
+            )
         if not output.files_changed or not all(
             self._allowed(path, run.issue_model.allowed_paths) for path in output.files_changed
         ):
-            return self._finish(run, "policy_rejected", note="structured path claim rejected")
-        return self.store.transition(
+            return self._finish(
+                run,
+                "policy_rejected",
+                note="structured path claim rejected",
+                result=output,
+            )
+        run = self.store.transition(
             run,
             "verifying",
             now=self.clock(),
@@ -288,6 +314,7 @@ class Engine:
             verification_started=self.clock(),
             pr_opened=self.clock(),
         )
+        return self._progress(run, "Verifying pull request with required check")
 
     def _verify(self, run: Run) -> Run:
         assert run.pr_url is not None
@@ -327,7 +354,7 @@ class Engine:
             started = run.verification_started or run.updated
             if self.clock() - started > 1800:
                 return self._finish(run, "ci_failed", ci="timed_out")
-            return run
+            return self._progress(run, f"Waiting for `{run.issue_model.check_name}`")
         if conclusion != "success":
             return self._finish(run, "ci_failed", ci=str(conclusion))
         return self._finish(run, "verified", ci="success")
@@ -377,6 +404,13 @@ class Engine:
         run, acquired = self.store.begin_start(run, self.clock())
         if not acquired:
             return run
+        run = self._progress(run, "Checking issue readiness")
+        if self.triage_devin is None:
+            return self._finish_triage(
+                run,
+                "triage_failed",
+                note="read-only triage service identity is not configured",
+            )
         if len(run.issue_title) > 256 or len(run.issue_body) > 20_000:
             return self._finish_triage(run, "triage_failed", note="issue content exceeds limits")
         midnight = (
@@ -393,23 +427,31 @@ class Engine:
             target_sha=target.sha,
             updated=self.clock(),
         )
-        result = self.devin.create_triage(
+        run = self._progress(run, "Creating read-only triage session")
+        result = self.triage_devin.create_triage(
             run.issue_model,
             run,
             self.triage_prompt(run.issue_model, target),
         )
-        return self.store.transition(
+        run = self.store.transition(
             run,
             "session_running",
             now=self.clock(),
             session_id=result.session_id,
             session_url=result.url,
         )
+        return self._progress(run, "Drafting remediation readiness brief")
 
     def _poll_triage(self, run: Run) -> Run:
         assert run.session_id is not None
+        if self.triage_devin is None:
+            return self._finish_triage(
+                run,
+                "triage_failed",
+                note="read-only triage service identity is not configured",
+            )
         session_id = run.session_id
-        snapshot = self.devin.get(session_id)
+        snapshot = self.triage_devin.get(session_id)
         updated = run.updated if run.state == "cancelling" else self.clock()
         run = self.store.update(
             run.run_id,
@@ -418,6 +460,8 @@ class Engine:
         )
         status = snapshot.status
         detail = snapshot.status_detail
+        if status == "running" and detail == "waiting_for_user" and snapshot.structured_output:
+            status = "exit"
         if run.state == "cancelling":
             if status in {"exit", "error", "suspended"} or self.clock() - run.updated >= 120:
                 return self._finish_triage(run, "timed_out")
@@ -425,8 +469,9 @@ class Engine:
         if status == "running" and detail in {"waiting_for_user", "waiting_for_approval"}:
             return self._finish_triage(run, "triage_failed", note=f"unexpected {detail}")
         if status == "running" and self.clock() - run.created > 600:
-            self.devin.delete(session_id)
-            return self.store.transition(run, "cancelling", now=self.clock())
+            self.triage_devin.delete(session_id)
+            run = self.store.transition(run, "cancelling", now=self.clock())
+            return self._progress(run, "Cancelling triage after wall-clock limit")
         if status in {"new", "claimed", "running", "resuming"}:
             return run
         if status == "suspended":
@@ -468,18 +513,52 @@ class Engine:
         command = f"`{output.acceptance_command}`" if output.acceptance_command else "Not proposed"
         ci_check = f"`{output.ci_check}`" if output.ci_check else "Not proposed"
         request_marker = sha256(run.key.encode()).hexdigest()[:16]
-        body = (
+        sections = [
+            f"### Readiness summary\n\n{self._github_text(output.summary)}",
+            (
+                "### Proposed remediation contract\n\n"
+                f"Allowed paths:\n{paths}\n\n"
+                f"Acceptance command: {command}\n\n"
+                f"CI check: {ci_check}"
+            ),
+        ]
+        if output.missing_information:
+            missing = "\n".join(
+                f"- {self._github_text(item)}" for item in output.missing_information
+            )
+            sections.append(f"### Missing information\n\n{missing}")
+        if output.risk_notes:
+            risks = "\n".join(f"- {self._github_text(item)}" for item in output.risk_notes)
+            sections.append(f"### Risk notes\n\n{risks}")
+        sections.append(f"### Next action\n\n{self._github_text(output.next_action)}")
+        if output.outcome == "triaged" and output.category != "security":
+            sections.append(
+                "Maintainers: comment `/devin fix` or add `devin-fix` to approve "
+                "bounded remediation; add `devin-exclude` to opt out."
+            )
+        contract_marker = (
             f"<!-- devin-triage-contract:{contract} -->\n"
-            f"<!-- devin-triage-request:{request_marker} -->\n"
-            f"Devin triage: **{output.category}** "
-            f"({output.confidence} confidence)\n\n"
-            f"{self._github_text(output.summary)}\n\n"
-            f"Next action: {self._github_text(output.next_action)}\n\n"
-            f"Proposed allowed paths:\n{paths}\n\n"
-            f"Proposed acceptance command: {command}\n\n"
-            f"Proposed CI check: {ci_check}\n\n"
-            "Maintainers: comment `/devin fix` or add `devin-fix` to start bounded "
-            "remediation; add `devin-exclude` to opt out."
+            if output.outcome == "triaged" and output.category != "security"
+            else ""
+        )
+        body = (
+            contract_marker
+            + f"<!-- devin-triage-request:{request_marker} -->\n"
+            + self._comment(
+                "Devin issue autopilot",
+                [
+                    ("Status", self._triage_status(output)),
+                    ("Category", output.category),
+                    ("Confidence", output.confidence),
+                    ("Session", run.session_url or "not started"),
+                    ("Target", self._target(run)),
+                    ("Outcome", f"**{output.outcome}**"),
+                    ("ACUs", f"{run.acus:.2f}"),
+                    ("Elapsed", f"{int(self.clock() - run.created)}s"),
+                    ("Run key", f"`{run.key}`"),
+                ],
+                "\n\n".join(sections),
+            )
         )
         comment_id = self.github.conclude_triage(run.issue, run.key, body, labels)
         run = self.store.transition(
@@ -488,6 +567,7 @@ class Engine:
             now=self.clock(),
             outcome="triaged",
             comment_id=comment_id,
+            structured_output=output.model_dump_json(),
         )
         return run
 
@@ -509,6 +589,8 @@ class Engine:
             labels.append("devin-needs-info")
         elif output.outcome == "needs_maintainer" or output.category == "security":
             labels.append("devin-needs-maintainer")
+        else:
+            labels.append("devin-candidate")
         labels.append("devin-triaged")
         return labels
 
@@ -548,6 +630,15 @@ class Engine:
         if issue.check_name not in self.settings.allowed_checks:
             return f"CI check is not allowed: {issue.check_name}"
         command = issue.acceptance_command
+        contract_values = [
+            issue.section("Symptom"),
+            issue.section("Expected"),
+            issue.check_name,
+            command,
+            *paths,
+        ]
+        if any(marker in value for value in contract_values for marker in ("<!--", "-->")):
+            return "contract contains unsafe comment markup"
         if len(command.splitlines()) != 1 or any(
             character in command for character in (";", "&", "|", "`", "$", ">", "<")
         ):
@@ -589,24 +680,28 @@ class Engine:
                 return f"forbidden allowed path: {path}"
         return ""
 
-    def _finish(self, run: Run, outcome: str, note: str = "", ci: str | None = None) -> Run:
+    def _finish(
+        self,
+        run: Run,
+        outcome: str,
+        note: str = "",
+        ci: str | None = None,
+        result: StructuredResult | None = None,
+    ) -> Run:
         if run.state != outcome:
+            values: dict[str, object] = {"outcome": outcome, "ci": ci}
+            if result is not None:
+                values["structured_output"] = result.model_dump_json()
             run = self.store.transition(
-                run, outcome, note=note, now=self.clock(), outcome=outcome, ci=ci
+                run,
+                outcome,
+                note=note,
+                now=self.clock(),
+                **values,
             )
         if run.comment_id is None:
-            elapsed = int(self.clock() - run.created)
-            reason = f"\nReason: {self._github_text(note)}" if note else ""
-            summary = f"\nSummary: {self._github_text(run.summary)}" if run.summary else ""
-            body = (
-                f"Outcome: **{outcome}**\n\n"
-                f"Session: {run.session_url or 'not started'}\n"
-                f"PR: {run.pr_url or 'none'}\n"
-                f"ACUs: {run.acus:.2f}\n"
-                f"Elapsed: {elapsed}s"
-                f"{summary}"
-                f"{reason}"
-            )
+            result = result or self._stored_result(run)
+            body = self._terminal_body(run, outcome, note, result)
             comment_id = self.github.conclude(run.issue, run.key, body, outcome)
             run = self.store.update(run.run_id, comment_id=comment_id, updated=self.clock())
         return run
@@ -617,15 +712,20 @@ class Engine:
                 run, outcome, note=note, now=self.clock(), outcome=outcome, ci=note
             )
         if run.comment_id is None:
-            elapsed = int(self.clock() - run.created)
-            reason = f"\n\nReason: {self._github_text(note)}" if note else ""
             request_marker = sha256(run.key.encode()).hexdigest()[:16]
-            body = (
-                f"<!-- devin-triage-request:{request_marker} -->\n"
-                f"Devin triage stopped: **{outcome}**{reason}\n\n"
-                f"Session: {run.session_url or 'not started'}\n"
-                f"ACUs: {run.acus:.2f}\n"
-                f"Elapsed: {elapsed}s"
+            body = f"<!-- devin-triage-request:{request_marker} -->\n" + self._comment(
+                "Devin issue autopilot",
+                [
+                    ("Status", "Triage stopped"),
+                    ("Session", run.session_url or "not started"),
+                    ("Target", self._target(run)),
+                    ("Outcome", f"**{outcome}**"),
+                    ("Reason", self._github_text(note) or "Triage could not complete."),
+                    ("ACUs", f"{run.acus:.2f}"),
+                    ("Elapsed", f"{int(self.clock() - run.created)}s"),
+                    ("Run key", f"`{run.key}`"),
+                ],
+                "A maintainer can update the issue and retrigger triage.",
             )
             comment_id = self.github.conclude_triage(
                 run.issue,
@@ -635,6 +735,117 @@ class Engine:
             )
             run = self.store.update(run.run_id, comment_id=comment_id, updated=self.clock())
         return run
+
+    @staticmethod
+    def _stored_result(run: Run) -> StructuredResult | None:
+        if not run.structured_output:
+            return None
+        try:
+            return StructuredResult.model_validate_json(run.structured_output)
+        except ValidationError:
+            return None
+
+    def _progress(self, run: Run, status: str) -> Run:
+        self.github.progress(run.issue, run.key, self._status_body(run, status))
+        return self.store.update(run.run_id, updated=self.clock())
+
+    def _status_body(self, run: Run, status: str) -> str:
+        rows = [
+            ("Status", status),
+            ("Started", self._timestamp(run.created)),
+            ("Last update", self._timestamp(self.clock())),
+            ("Session", run.session_url or "not started"),
+            ("Pull request", run.pr_url or "none"),
+            ("Target", self._target(run)),
+            ("Verification", self._verification(run)),
+            ("Outcome", "pending"),
+            ("Run key", f"`{run.key}`"),
+        ]
+        return self._comment("Devin issue autopilot", rows, "Follow this comment for updates.")
+
+    def _terminal_body(
+        self,
+        run: Run,
+        outcome: str,
+        note: str,
+        result: StructuredResult | None,
+    ) -> str:
+        rows = [
+            ("Status", self._terminal_status(outcome)),
+            ("Started", self._timestamp(run.created)),
+            ("Last update", self._timestamp(self.clock())),
+            ("Session", run.session_url or "not started"),
+            ("Pull request", run.pr_url or "none"),
+            ("Target", self._target(run)),
+            ("Verification", self._verification(run)),
+            ("Outcome", f"**{outcome}**"),
+            ("Reason", self._github_text(note) or self._default_reason(outcome)),
+            ("ACUs", f"{run.acus:.2f}"),
+            ("Elapsed", f"{int(self.clock() - run.created)}s"),
+            ("Run key", f"`{run.key}`"),
+        ]
+        sections: list[str] = []
+        if result is not None:
+            sections.append(
+                f"### Root cause\n\n{self._github_text(result.root_cause) or 'Not reported.'}"
+            )
+            if result.files_changed:
+                files = "\n".join(f"- `{path}`" for path in result.files_changed)
+                sections.append(f"### Changed paths\n\n{files}")
+            if result.acceptance_output:
+                output = self._github_text(result.acceptance_output.strip()).replace(
+                    "```", "``\u200b`"
+                )
+                sections.append(f"### Acceptance output\n\n```text\n{output}\n```")
+        return self._comment("Devin issue autopilot", rows, "\n\n".join(sections))
+
+    @staticmethod
+    def _comment(title: str, rows: list[tuple[str, str]], body: str) -> str:
+        table = "\n".join(
+            f"| {field} | {value.replace('|', '\\|').replace(chr(10), '<br>')} |"
+            for field, value in rows
+        )
+        return f"## {title}\n\n| Field | Value |\n|---|---|\n{table}\n\n{body}".strip()
+
+    @staticmethod
+    def _timestamp(value: float) -> str:
+        return datetime.fromtimestamp(value, UTC).isoformat(timespec="seconds")
+
+    @staticmethod
+    def _target(run: Run) -> str:
+        if run.target_branch and run.target_sha:
+            return f"`{run.target_branch}@{run.target_sha}`"
+        return "not pinned"
+
+    @staticmethod
+    def _verification(run: Run) -> str:
+        return run.ci or "pending"
+
+    @staticmethod
+    def _terminal_status(outcome: str) -> str:
+        return "Ready for review" if outcome == "verified" else "Stopped"
+
+    @staticmethod
+    def _default_reason(outcome: str) -> str:
+        return {
+            "verified": "Required verification passed.",
+            "ci_failed": "Required verification did not pass.",
+            "policy_rejected": "The run violated remediation policy.",
+            "no_pr": "No open pull request was available to verify.",
+            "blocked": "The session could not proceed without external input.",
+            "no_change": "No code change was needed.",
+            "timed_out": "The session exceeded the wall-clock limit.",
+            "stale_sha": "The target branch changed before verification completed.",
+            "devin_error": "The Devin session or controller returned an error.",
+        }.get(outcome, "The run stopped.")
+
+    @staticmethod
+    def _triage_status(output: TriageResult) -> str:
+        if output.outcome == "needs_info":
+            return "Needs reporter or maintainer input"
+        if output.outcome == "needs_maintainer" or output.category == "security":
+            return "Needs maintainer review"
+        return "Ready for bounded remediation"
 
     def run_issue(
         self,
