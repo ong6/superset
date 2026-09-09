@@ -21,7 +21,7 @@ from pathlib import Path
 import typer
 
 from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
-from autopilot.engine import Engine, TERMINAL, write_report
+from autopilot.engine import Engine, TERMINAL, rebuild_report, write_report
 from autopilot.models import Settings
 from autopilot.store import Store
 
@@ -90,9 +90,27 @@ def triage(
 
 
 @app.command()
-def report() -> None:
+def report(
+    devin: bool = typer.Option(False, "--devin"),
+) -> None:
+    """Rebuild and print the durable GitHub-backed report."""
+
     settings = Settings.from_env(fake=True)
-    typer.echo(write_report(Store(settings.db_path)))
+    if not settings.github_token:
+        raise typer.BadParameter("GITHUB_TOKEN is required")
+    devin_client = (
+        DevinClient(settings)
+        if devin and settings.devin_api_key and settings.devin_org_id
+        else None
+    )
+    typer.echo(
+        rebuild_report(
+            GitHubClient(settings),
+            Store(settings.db_path),
+            devin_client,
+        ),
+        nl=False,
+    )
 
 
 @app.command()

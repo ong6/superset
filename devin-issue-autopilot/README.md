@@ -139,8 +139,17 @@ issue contract takes precedence.
 | `python -m autopilot watch` | Discover labeled issues and advance live runs forever |
 | `python -m autopilot triage --issue N` | Classify one issue and post a triage brief |
 | `python -m autopilot once --issue N` | Run one issue to a terminal outcome |
-| `python -m autopilot report` | Print the table and write `reports/summary.md` |
+| `python -m autopilot report` | Rebuild GitHub-backed history, print it, and write `reports/summary.md` |
+| `python -m autopilot report --devin` | Also reconcile ACUs and pull requests from tagged Devin v3 sessions when Devin credentials are set |
 | `python -m autopilot simulate` | Run credential-free fake fixtures |
+
+From this directory, `make simulate` is the documented credential-free
+container check. Reviewers can rebuild the repository's live lifecycle report
+with:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" GITHUB_REPO=ong6/superset make report
+```
 
 ## Guardrails
 
@@ -163,9 +172,36 @@ issue contract takes precedence.
 | Label reconciliation | Removes trigger and conflicting terminal labels before applying the outcome |
 | Workflow claim | Serializes by issue and rejects existing triage or remediation claims |
 
-The local database stores runs and append-only transitions. Reports include the
-session, state, elapsed time, ACU use, pull request, CI result, outcome, and
-nudge count.
+## Observability
+
+`report` paginates issues carrying any `devin-*` label, reconstructs terminal
+triage and remediation runs from GitHub Actions comments, and reads current pull
+request state. `GITHUB_TOKEN` is the only required credential. With `--devin`
+and both `DEVIN_API_KEY` and `DEVIN_ORG_ID`, it also reconciles ACUs and pull
+requests from tagged v3 sessions. SQLite is a local cache rather than the
+historical source of truth.
+
+The terminal and `reports/summary.md` contain the same per-run table and
+denominated totals. Rows link their issue, session, and pull request; distinguish
+triage, remediation, setup/build roles, and simulation; and separate PR-opened,
+CI-verified, merged, and verified-merged outcomes. Every available terminal
+comment is retained, including failed attempts. Lifecycle comments updated in
+place by GitHub can expose only their latest durable body.
+
+Raw ACU telemetry preserves reported zero separately from missing data. It does
+not establish billing, monetary cost, savings, or free remediation, so the
+report suppresses per-success ratios when telemetry is incomplete. The
+`AUTOPILOT_DAILY_ACU_CAP` gate sums only reported usage in the current local
+SQLite cache; missing telemetry is not counted, and workflow runners use an
+ephemeral database, so it is not a durable cross-run or organization billing
+limit. Each remediation session is still created with a 4-ACU limit and a
+2400-second controller timeout with at most one nudge; triage uses
+`AUTOPILOT_TRIAGE_ACU_LIMIT` (default 1), a 600-second timeout, and no nudges.
+
+Workflow logs emit `transition issue=... run_id=... from=... to=...
+elapsed=...`, so `gh run view --log | grep transition` shows each run's state
+timeline. Manual report dispatches publish the Markdown to the workflow summary;
+the daily schedule commits a changed summary to `master`.
 
 ## Scope
 

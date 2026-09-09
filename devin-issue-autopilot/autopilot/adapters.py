@@ -18,6 +18,7 @@ import binascii
 import json
 import re
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import TypeAlias
@@ -28,6 +29,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from autopilot.models import (
     Issue,
     PullRequest,
+    ReportComment,
+    ReportIssue,
+    ReportPullRequest,
+    ReportSession,
+    ReportSessionsPage,
     Run,
     SessionCreate,
     SessionSnapshot,
@@ -58,6 +64,8 @@ class GitHubCommit(BaseModel):
 class GitHubIssueData(BaseModel):
     number: int
     title: str
+    html_url: str = ""
+    state: str = "open"
     body: str | None = None
     created_at: str = ""
     updated_at: str = ""
@@ -77,6 +85,14 @@ class GitHubPullData(BaseModel):
     body: str | None = None
     head: GitHubRef
     base: GitHubRef
+
+
+class GitHubPullStateData(BaseModel):
+    """GitHub response fields needed for report PR state."""
+
+    state: str
+    created_at: str
+    merged_at: str | None = None
 
 
 class GitHubRepoData(BaseModel):
@@ -227,6 +243,30 @@ class DevinClient:
         response = self.client.delete(f"/v3/organizations/{self.org_id}/sessions/{session_id}")
         response.raise_for_status()
 
+    def list_report_sessions(self) -> list[ReportSession]:
+        """List autopilot sessions for optional report reconciliation."""
+
+        sessions: list[ReportSession] = []
+        after: str | None = None
+        while True:
+            params: dict[str, str | int | list[str]] = {
+                "first": 200,
+                "tags": ["autopilot"],
+                "repo_names": [self.repo],
+            }
+            if after is not None:
+                params["after"] = after
+            response = self.client.get(
+                f"/v3/organizations/{self.org_id}/sessions",
+                params=params,
+            )
+            response.raise_for_status()
+            page = ReportSessionsPage.model_validate(response.json())
+            sessions.extend(page.items)
+            if not page.has_next_page or page.end_cursor is None:
+                return sessions
+            after = page.end_cursor
+
 
 class GitHubClient:
     def __init__(self, settings: Settings, transport: httpx.BaseTransport | None = None):
@@ -325,7 +365,8 @@ class GitHubClient:
 
     def _comments(self, number: int) -> list[GitHubComment]:
         comments: list[GitHubComment] = []
-        for page in range(1, 11):
+        page = 1
+        while True:
             response = self.client.get(
                 f"/repos/{self.repo}/issues/{number}/comments",
                 params={"per_page": 100, "page": page},
@@ -334,8 +375,8 @@ class GitHubClient:
             batch = [GitHubComment.model_validate(item) for item in response.json()]
             comments.extend(batch)
             if len(batch) < 100:
-                break
-        return comments
+                return comments
+            page += 1
 
     def list_issues(self) -> list[Issue]:
         response = self.client.get(
@@ -352,6 +393,45 @@ class GitHubClient:
                 continue
             issues.append(self._issue(issue))
         return issues
+
+    def report_issues(self) -> list[ReportIssue]:
+        """List labeled issues and comments used to rebuild reports."""
+
+        issues: list[ReportIssue] = []
+        page = 1
+        while True:
+            response = self.client.get(
+                f"/repos/{self.repo}/issues",
+                params={"state": "all", "per_page": 100, "page": page},
+            )
+            response.raise_for_status()
+            batch = response.json()
+            for item in batch:
+                if "pull_request" in item:
+                    continue
+                data = GitHubIssueData.model_validate(item)
+                labels = [label.name for label in data.labels]
+                if not any(label.startswith("devin-") for label in labels):
+                    continue
+                comments = [
+                    ReportComment(
+                        author=comment.user.login if comment.user is not None else "",
+                        body=comment.body,
+                    )
+                    for comment in self._comments(data.number)
+                ]
+                issues.append(
+                    ReportIssue(
+                        number=data.number,
+                        url=data.html_url,
+                        state=data.state,
+                        labels=labels,
+                        comments=comments,
+                    )
+                )
+            if len(batch) < 100:
+                return issues
+            page += 1
 
     def get_issue(
         self,
@@ -421,6 +501,20 @@ class GitHubClient:
             head_ref=data.head.ref,
             base_sha=data.base.sha,
             base_ref=data.base.ref,
+        )
+
+    def report_pr(self, url: str) -> ReportPullRequest:
+        """Read the current state and creation time for a repository PR."""
+
+        match = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/(\d+)", url)
+        if match is None or match.group(1) != self.repo:
+            raise ValueError("PR URL is not for the configured repository")
+        response = self.client.get(f"/repos/{self.repo}/pulls/{match.group(2)}")
+        response.raise_for_status()
+        data = GitHubPullStateData.model_validate(response.json())
+        return ReportPullRequest(
+            state="merged" if data.merged_at is not None else data.state,
+            created_at=data.created_at,
         )
 
     def pr_files(self, url: str) -> list[str]:
@@ -650,6 +744,8 @@ class FakeGitHub:
         self.current_target = target or Target(branch="master", sha="b" * 40)
         self.comments: list[dict[str, object]] = []
         self.labeler_is_authorized = True
+        self.report_fixture: list[ReportIssue] | None = None
+        self.report_prs: dict[str, ReportPullRequest] = {}
 
     @classmethod
     def load(cls, path: Path) -> "FakeGitHub":
@@ -658,8 +754,45 @@ class FakeGitHub:
         prs = {str(url): FakePR.model_validate(pr) for url, pr in data["prs"].items()}
         return cls(issues, prs)
 
+    @classmethod
+    def load_report(cls, path: Path) -> "FakeGitHub":
+        """Load report issues and PR metadata from a fixture."""
+
+        data = json.loads(path.read_text())
+        github = cls([], {})
+        github.report_fixture = [ReportIssue.model_validate(issue) for issue in data["issues"]]
+        github.report_prs = {
+            str(url): ReportPullRequest.model_validate(pr) for url, pr in data["prs"].items()
+        }
+        return github
+
     def list_issues(self) -> list[Issue]:
         return list(self.issues.values())
+
+    def report_issues(self) -> list[ReportIssue]:
+        """Return report issues from fixtures or recorded fake comments."""
+
+        if self.report_fixture is not None:
+            return self.report_fixture
+        comments_by_issue: dict[int, list[ReportComment]] = {}
+        for comment in self.comments:
+            issue_number = int(str(comment["issue"]))
+            comments_by_issue.setdefault(issue_number, []).append(
+                ReportComment(
+                    author="github-actions[bot]",
+                    body=str(comment["body"]),
+                )
+            )
+        return [
+            ReportIssue(
+                number=issue_number,
+                url=f"https://github.com/ong6/superset/issues/{issue_number}",
+                state="open",
+                labels=[],
+                comments=comments_by_issue.get(issue_number, []),
+            )
+            for issue_number in self.issues
+        ]
 
     def get_issue(
         self,
@@ -709,6 +842,16 @@ class FakeGitHub:
             head_ref=pr.head_ref,
             base_sha=pr.base_sha,
             base_ref=pr.base_ref,
+        )
+
+    def report_pr(self, url: str) -> ReportPullRequest:
+        """Return fixture-backed PR metadata."""
+
+        if url in self.report_prs:
+            return self.report_prs[url]
+        return ReportPullRequest(
+            state=self.prs[url].state,
+            created_at=datetime.now(UTC).isoformat(),
         )
 
     def pr_files(self, url: str) -> list[str]:

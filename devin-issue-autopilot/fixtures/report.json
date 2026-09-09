@@ -1,0 +1,51 @@
+{
+  "_license": "Licensed to the Apache Software Foundation (ASF) under the Apache License, Version 2.0.",
+  "issues": [
+    {
+      "number": 101,
+      "url": "https://github.com/ong6/superset/issues/101",
+      "state": "closed",
+      "labels": ["devin-verified"],
+      "comments": [
+        {
+          "author": "github-actions[bot]",
+          "body": "<!-- devin-issue-autopilot:101 -->\n<!-- devin-issue-autopilot:aaaaaaaaaaaaaaaa -->\n## Devin issue autopilot\n\n| Field | Value |\n|---|---|\n| Status | Ready for review |\n| Started | 2026-01-01T10:00:00+00:00 |\n| Session | https://app.devin.ai/sessions/verified |\n| Pull request | https://github.com/ong6/superset/pull/1001 |\n| Verification | success |\n| Outcome | **verified** |\n| ACUs | 3.50 |\n| Elapsed | 900s |\n| Nudges | 1 |"
+        }
+      ]
+    },
+    {
+      "number": 102,
+      "url": "https://github.com/ong6/superset/issues/102",
+      "state": "closed",
+      "labels": ["devin-needs-human"],
+      "comments": [
+        {
+          "author": "github-actions[bot]",
+          "body": "<!-- devin-issue-autopilot:102 -->\n<!-- devin-issue-autopilot:bbbbbbbbbbbbbbbb -->\n## Devin issue autopilot\n\n| Field | Value |\n|---|---|\n| Status | Stopped |\n| Started | 2026-01-02T10:00:00+00:00 |\n| Session | https://app.devin.ai/sessions/ci-failed |\n| Pull request | https://github.com/ong6/superset/pull/1002 |\n| Verification | failure |\n| Outcome | **ci_failed** |\n| ACUs | 0.00 |\n| Elapsed | 1200s |\n| Nudges | 2 |"
+        }
+      ]
+    },
+    {
+      "number": 103,
+      "url": "https://github.com/ong6/superset/issues/103",
+      "state": "open",
+      "labels": ["devin-triaged", "devin-needs-maintainer"],
+      "comments": [
+        {
+          "author": "github-actions[bot]",
+          "body": "<!-- devin-issue-autopilot:103 -->\n<!-- devin-triage-request:cccccccccccccccc -->\n## Devin issue autopilot\n\n| Field | Value |\n|---|---|\n| Status | Needs maintainer |\n| Started | 2026-01-03T10:00:00+00:00 |\n| Session | https://app.devin.ai/sessions/triage |\n| Outcome | **triaged** |\n| ACUs | unknown |\n| Elapsed | 180s |\n| Nudges | 0 |"
+        }
+      ]
+    }
+  ],
+  "prs": {
+    "https://github.com/ong6/superset/pull/1001": {
+      "state": "merged",
+      "created_at": "2026-01-01T10:05:00+00:00"
+    },
+    "https://github.com/ong6/superset/pull/1002": {
+      "state": "open",
+      "created_at": "2026-01-02T10:10:00+00:00"
+    }
+  }
+}

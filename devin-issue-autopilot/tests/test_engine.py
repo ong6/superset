@@ -24,8 +24,8 @@ import httpx
 import pytest
 
 from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
-from autopilot.engine import Engine
-from autopilot.models import Issue, Run, SessionCreate, Settings
+from autopilot.engine import Engine, rebuild_report
+from autopilot.models import Issue, ReportSession, Run, SessionCreate, Settings
 from autopilot.store import Store
 
 
@@ -577,6 +577,24 @@ def test_writer_session_rejects_triage_output(tmp_path: Path) -> None:
     assert devin.create_calls == 1
 
 
+@pytest.mark.parametrize(
+    ("api_value", "expected"),
+    [(None, "| ACUs | unknown |"), (0, "| ACUs | 0.00 |")],
+)
+def test_terminal_comment_distinguishes_missing_and_zero_acus(
+    tmp_path: Path,
+    api_value: float | None,
+    expected: str,
+) -> None:
+    snapshot = exit_snapshot("https://github.com/ong6/superset/pull/10")
+    snapshot["acus_consumed"] = api_value
+    engine, _, github, item = setup_engine(tmp_path, [snapshot])
+
+    engine.run_issue(item, sleep=lambda _: None)
+
+    assert expected in str(github.comments[0]["body"])
+
+
 def test_branch_movement_rejects_stale_proposal(tmp_path: Path) -> None:
     url = "https://github.com/ong6/superset/pull/10"
     engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
@@ -1081,3 +1099,138 @@ def test_restart_preserves_structured_terminal_details(tmp_path: Path) -> None:
     assert run.state == "verified"
     assert "A bounded fixture failure." in str(github.comments[0]["body"])
     assert "1 passed" in str(github.comments[0]["body"])
+
+
+def test_report_rebuilds_from_fake_github_without_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_network(*args: object, **kwargs: object) -> None:
+        raise AssertionError("report test attempted network access")
+
+    monkeypatch.setattr(httpx.Client, "send", reject_network)
+    github = FakeGitHub.load_report(Path("fixtures/report.json"))
+    store = Store(tmp_path / "autopilot.db")
+    report_path = tmp_path / "summary.md"
+
+    markdown = rebuild_report(github, store, path=report_path)
+
+    assert "- Triaged: 1/3 runs" in markdown
+    assert "- Fix attempted: 2/3 runs" in markdown
+    assert "- Simulated: 0/3 runs" in markdown
+    assert "- PR opened: 2/2 fix attempts" in markdown
+    assert "- CI verified: 1/2 fix attempts" in markdown
+    assert "- Merged: 1/2 fix attempts" in markdown
+    assert "- Verified merged: 1/2 fix attempts" in markdown
+    assert "- ci_failed: 1/2 fix attempts" in markdown
+    assert "- policy_rejected: 0/2 fix attempts" in markdown
+    assert "- needs-human: 2/3 runs" in markdown
+    assert "- Median time to PR: 450s (2/2 PRs timed)" in markdown
+    assert "- ACUs total: 3.50 raw across 2/3 runs" in markdown
+    assert "- Reported zero ACUs: 1/2 reported runs" in markdown
+    assert "- ACUs per verified PR: n/a" in markdown
+    assert "- Verified rate: 1/2 (50.0%)" in markdown
+    assert "[#101](https://github.com/ong6/superset/issues/101) (closed)" in markdown
+    assert "[session](https://app.devin.ai/sessions/verified)" in markdown
+    assert "[PR](https://github.com/ong6/superset/pull/1001) (merged)" in markdown
+    assert "| unknown |" in markdown
+    assert "(merged)" in markdown
+    assert "(open)" in markdown
+    assert report_path.read_text() == markdown
+    cached = store.cached_report_runs()
+    assert len(cached) == 3
+    assert [run.acus for run in cached] == [3.5, 0.0, None]
+
+
+def test_transition_logs_form_a_grep_friendly_timeline(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    store = Store(tmp_path / "autopilot.db")
+    claimed = store.claim(issue(), now=100)
+    assert claimed is not None
+
+    store.transition(claimed, "blocked", now=125)
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == [
+        f"transition issue=1 run_id={claimed.run_id} from=- to=new elapsed=0s",
+        f"transition issue=1 run_id={claimed.run_id} from=new to=blocked elapsed=25s",
+    ]
+
+
+def test_devin_report_sessions_paginate_by_autopilot_tag(tmp_path: Path) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        after = request.url.params.get("after")
+        session_id = "devin-two" if after else "devin-one"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "session_id": session_id,
+                        "url": f"https://app.devin.ai/sessions/{session_id}",
+                        "status": "exit",
+                        "tags": ["autopilot", "issue:1", "role:remediation"],
+                        "acus_consumed": 1,
+                        "pull_requests": [],
+                    }
+                ],
+                "has_next_page": not after,
+                "end_cursor": "next" if not after else None,
+            },
+        )
+
+    settings = Settings("devin", "org", "github", db_path=tmp_path / "autopilot.db")
+    sessions = DevinClient(settings, httpx.MockTransport(handler)).list_report_sessions()
+
+    assert [session.session_id for session in sessions] == ["devin-one", "devin-two"]
+    assert requests[0].url.params.get_list("tags") == ["autopilot"]
+    assert requests[0].url.params.get_list("repo_names") == ["ong6/superset"]
+    assert requests[1].url.params["after"] == "next"
+
+
+def test_report_reconciles_acus_from_devin_sessions(tmp_path: Path) -> None:
+    class ReportDevin:
+        """Provide deterministic session reconciliation data."""
+
+        def list_report_sessions(self) -> list[ReportSession]:
+            """Return one session matching the verified fixture run."""
+
+            return [
+                ReportSession(
+                    session_id="verified",
+                    url="https://app.devin.ai/sessions/verified",
+                    status="exit",
+                    tags=["autopilot", "issue:101", "role:remediation"],
+                    acus_consumed=5,
+                )
+            ]
+
+    markdown = rebuild_report(
+        FakeGitHub.load_report(Path("fixtures/report.json")),
+        Store(tmp_path / "autopilot.db"),
+        ReportDevin(),
+        tmp_path / "summary.md",
+    )
+
+    assert "- ACUs total: 5.00 raw across 2/3 runs" in markdown
+
+
+def test_report_requires_merge_for_verified_success(tmp_path: Path) -> None:
+    github = FakeGitHub.load_report(Path("fixtures/report.json"))
+    github.report_prs["https://github.com/ong6/superset/pull/1001"].state = "open"
+
+    markdown = rebuild_report(
+        github,
+        Store(tmp_path / "autopilot.db"),
+        path=tmp_path / "summary.md",
+    )
+
+    assert "- CI verified: 1/2 fix attempts" in markdown
+    assert "- Merged: 0/2 fix attempts" in markdown
+    assert "- Verified merged: 0/2 fix attempts" in markdown
+    assert "- Verified rate: 0/2 (0.0%)" in markdown
