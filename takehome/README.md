@@ -119,6 +119,62 @@ The implementation is in
 wiring in the repository workflow and reusable triage and repair procedures in
 the Devin skills.
 
+## Demo architecture diagrams
+
+Three Archify specifications present the implemented workflow:
+
+- [system architecture](architecture/issue-autopilot.architecture.json) for
+  boundaries, integrations, policy gates, and durable evidence;
+- [remediation workflow](architecture/issue-autopilot.workflow.json) for issue
+  intake, triage, authorization, repair, verification, and fail-closed exits;
+- [run lifecycle](architecture/issue-autopilot.lifecycle.json) for persisted
+  states, bounded cancellation, and terminal outcomes.
+
+The architecture evidence is pinned to repository revision
+`4708769acb61758b30e580522913a11a282afcb9`. Source links use the authenticated
+local Git proxy with `link_mode: local-only`. Generated HTML bundles and browser
+evidence are reproducible local outputs rather than checked-in artifacts.
+
+From the `archify` directory of a separate `tt-a1i/archify` checkout:
+
+```bash
+SUPERSET_REPO=/path/to/superset
+
+node bin/archify.mjs validate architecture \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.architecture.json" \
+  --quality showcase --repo-root "$SUPERSET_REPO" --json
+node bin/archify.mjs deliver architecture \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.architecture.json" \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot-architecture.html" \
+  --quality showcase --repo-root "$SUPERSET_REPO" --json
+
+node bin/archify.mjs validate workflow \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.workflow.json" \
+  --quality showcase --json
+node bin/archify.mjs deliver workflow \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.workflow.json" \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot-workflow.html" \
+  --quality showcase --json
+
+node bin/archify.mjs validate lifecycle \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.lifecycle.json" \
+  --quality showcase --json
+node bin/archify.mjs deliver lifecycle \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.lifecycle.json" \
+  "$SUPERSET_REPO/takehome/architecture/issue-autopilot-lifecycle.html" \
+  --quality showcase --json
+
+for artifact in architecture workflow lifecycle; do
+  node bin/archify.mjs visual-check \
+    "$SUPERSET_REPO/takehome/architecture/issue-autopilot-$artifact.html" \
+    --json
+done
+```
+
+All three specifications pass 9 of 9 showcase validation checks with zero
+errors or warnings. Automated browser evidence passes containment, readability,
+viewer chrome, and screenshot capture at every Archify desktop viewport.
+
 ## Goals
 
 1. **Reduce issue-to-review effort.** Automate repetitive triage, investigation,

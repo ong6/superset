@@ -1,0 +1,281 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Devin Issue Autopilot",
+    "locale": "en",
+    "output": "issue-autopilot-architecture.html",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://git-manager.devin.ai/proxy/github.com/ong6/superset",
+      "link_mode": "local-only",
+      "revision": "4708769acb61758b30e580522913a11a282afcb9"
+    },
+    "views": [
+      {
+        "id": "triage-path",
+        "label": "Triage",
+        "focus": ["issue", "actions", "policy", "controller", "triage", "outcome"],
+        "note": "New issues receive a bounded readiness brief before a maintainer grants write scope."
+      },
+      {
+        "id": "remediation-path",
+        "label": "Repair",
+        "focus": ["issue", "actions", "policy", "controller", "remediation", "prci", "outcome"],
+        "note": "An approved contract becomes one scoped session and one pull request."
+      },
+      {
+        "id": "verification-path",
+        "label": "Proof",
+        "focus": ["policy", "controller", "remediation", "prci", "outcome"],
+        "note": "The controller checks linkage, paths, pinned SHA, and named CI."
+      },
+      {
+        "id": "operations-path",
+        "label": "Evidence",
+        "focus": ["controller", "store", "report", "outcome"],
+        "note": "Durable transitions update issue status and the pilot report."
+      }
+    ],
+    "viewBox": [1360, 640]
+  },
+  "components": [
+    {
+      "id": "issue",
+      "type": "external",
+      "label": "GitHub Issue",
+      "sublabel": "contract",
+      "brand": "github",
+      "pos": [30, 300],
+      "size": [155, 70],
+      "sources": [
+        {
+          "path": "devin-issue-autopilot/README.md",
+          "label": "Issue contract"
+        }
+      ]
+    },
+    {
+      "id": "actions",
+      "type": "cloud",
+      "label": "GitHub Actions",
+      "sublabel": "dispatch + claim",
+      "brand": "github-actions",
+      "pos": [220, 300],
+      "size": [145, 70],
+      "sources": [
+        {
+          "path": ".github/workflows/devin-issue-autopilot.yml",
+          "label": "Dispatcher"
+        }
+      ]
+    },
+    {
+      "id": "policy",
+      "type": "security",
+      "label": "Policy Gates",
+      "sublabel": "actor · SHA",
+      "pos": [400, 300],
+      "size": [150, 70],
+      "sources": [
+        {
+          "path": "devin-issue-autopilot/autopilot/engine.py",
+          "label": "Preflight and verify"
+        }
+      ]
+    },
+    {
+      "id": "controller",
+      "type": "backend",
+      "label": "Autopilot Controller",
+      "sublabel": "state machine",
+      "pos": [585, 300],
+      "size": [160, 70],
+      "sources": [
+        {
+          "path": "devin-issue-autopilot/autopilot/engine.py",
+          "label": "Engine"
+        },
+        {
+          "path": "devin-issue-autopilot/autopilot/adapters.py",
+          "label": "API adapters"
+        }
+      ]
+    },
+    {
+      "id": "triage",
+      "type": "backend",
+      "label": "Triage Session",
+      "sublabel": "read-only",
+      "pos": [782.5, 80],
+      "size": [155, 70],
+      "sources": [
+        {
+          "path": ".devin/skills/superset-issue-triage/SKILL.md",
+          "label": "Triage skill"
+        }
+      ]
+    },
+    {
+      "id": "remediation",
+      "type": "backend",
+      "label": "Remediation Session",
+      "sublabel": "bounded session",
+      "pos": [780, 300],
+      "size": [155, 70],
+      "sources": [
+        {
+          "path": ".devin/skills/superset-issue-fix/SKILL.md",
+          "label": "Fix skill"
+        },
+        {
+          "path": "devin-issue-autopilot/autopilot/adapters.py",
+          "label": "Session contract"
+        }
+      ]
+    },
+    {
+      "id": "prci",
+      "type": "cloud",
+      "label": "Pull Request + CI",
+      "sublabel": "paths · linkage · CI",
+      "brand": "github",
+      "pos": [970, 300],
+      "size": [165, 70],
+      "sources": [
+        {
+          "path": "devin-issue-autopilot/autopilot/engine.py",
+          "label": "Independent checks"
+        }
+      ]
+    },
+    {
+      "id": "outcome",
+      "type": "external",
+      "label": "Living Issue Status",
+      "sublabel": "comment · labels",
+      "brand": "github",
+      "pos": [1170, 300],
+      "size": [160, 70],
+      "sources": [
+        {
+          "path": "devin-issue-autopilot/autopilot/adapters.py",
+          "label": "Upsert and labels"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "SQLite Run Store",
+      "sublabel": "transitions",
+      "pos": [585, 520],
+      "size": [160, 70],
+      "sources": [
+        {
+          "path": "devin-issue-autopilot/autopilot/store.py",
+          "label": "Durable state"
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "type": "external",
+      "label": "Pilot Report",
+      "sublabel": "latency · ACUs · outcome",
+      "pos": [970, 520],
+      "size": [165, 70],
+      "sources": [
+        {
+          "path": "devin-issue-autopilot/autopilot/engine.py",
+          "label": "Report writer"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "GitHub workflow boundary",
+      "wraps": ["issue", "actions", "prci", "outcome"],
+      "pad": 18
+    },
+    {
+      "kind": "security-group",
+      "label": "Controller-held credentials",
+      "wraps": ["policy", "controller", "store"],
+      "pad": 10
+    },
+    {
+      "kind": "security-group",
+      "label": "Secretless bounded sessions",
+      "wraps": ["triage", "remediation"],
+      "pad": 10
+    }
+  ],
+  "connections": [
+    {
+      "id": "issue-actions",
+      "from": "issue",
+      "to": "actions",
+      "variant": "emphasis"
+    },
+    {
+      "id": "actions-policy",
+      "from": "actions",
+      "to": "policy",
+      "variant": "security"
+    },
+    {
+      "id": "policy-controller",
+      "from": "policy",
+      "to": "controller",
+      "variant": "security"
+    },
+    {
+      "id": "controller-remediation",
+      "from": "controller",
+      "to": "remediation",
+      "variant": "emphasis"
+    },
+    {
+      "id": "remediation-prci",
+      "from": "remediation",
+      "to": "prci",
+      "variant": "emphasis"
+    },
+    {
+      "id": "prci-outcome",
+      "from": "prci",
+      "to": "outcome",
+      "variant": "emphasis"
+    },
+    {
+      "id": "controller-triage",
+      "from": "controller",
+      "to": "triage",
+      "variant": "dashed"
+    },
+    {
+      "id": "triage-outcome",
+      "from": "triage",
+      "to": "outcome",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [[960, 115], [1250, 115]]
+    },
+    {
+      "id": "controller-store",
+      "from": "controller",
+      "to": "store"
+    },
+    {
+      "id": "store-report",
+      "from": "store",
+      "to": "report"
+    }
+  ],
+  "cards": []
+}

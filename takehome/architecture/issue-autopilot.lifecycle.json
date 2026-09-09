@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Remediation Run Lifecycle",
+    "locale": "en",
+    "output": "issue-autopilot-lifecycle.html",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "Verified run",
+        "focus": ["new", "creating", "session_running", "verifying", "verified"],
+        "note": "The persisted run advances from claim to independent proof."
+      },
+      {
+        "id": "session-controls",
+        "label": "Session controls",
+        "focus": ["session_running", "cancelling", "terminal_stop"],
+        "note": "One nudge, approval blocking, and timeout bound the session."
+      },
+      {
+        "id": "policy-exits",
+        "label": "Policy exits",
+        "focus": ["creating", "verifying", "policy_rejected", "terminal_stop"],
+        "note": "Invalid contracts, missing PRs, stale SHA, and failed CI stop."
+      }
+    ],
+    "viewBox": [1120, 595],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Persisted main states"
+    },
+    {
+      "id": "controls",
+      "label": "Session controls"
+    },
+    {
+      "id": "terminal",
+      "label": "Terminal outcomes"
+    }
+  ],
+  "states": [
+    {
+      "id": "new",
+      "type": "start",
+      "label": "New",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "width": 104,
+      "height": 68
+    },
+    {
+      "id": "creating",
+      "type": "active",
+      "label": "Creating",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "width": 110,
+      "height": 68
+    },
+    {
+      "id": "session_running",
+      "type": "active",
+      "label": "Session Running",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "width": 110,
+      "height": 68
+    },
+    {
+      "id": "verifying",
+      "type": "decision",
+      "label": "Verifying",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "width": 110,
+      "height": 68
+    },
+    {
+      "id": "verified",
+      "type": "success",
+      "label": "Verified",
+      "lane": "main",
+      "col": 4,
+      "step": "05",
+      "width": 104,
+      "height": 68
+    },
+    {
+      "id": "cancelling",
+      "type": "active",
+      "label": "Cancelling",
+      "lane": "controls",
+      "col": 0,
+      "width": 112,
+      "height": 64
+    },
+    {
+      "id": "policy_rejected",
+      "type": "failure",
+      "label": "Policy Rejected",
+      "lane": "terminal",
+      "col": 0,
+      "width": 118,
+      "height": 36,
+      "yOffset": -13
+    },
+    {
+      "id": "terminal_stop",
+      "type": "failure",
+      "label": "Stopped",
+      "lane": "terminal",
+      "col": 1,
+      "width": 124,
+      "height": 36,
+      "yOffset": -13
+    }
+  ],
+  "transitions": [
+    {
+      "id": "new-creating",
+      "from": "new",
+      "to": "creating",
+      "variant": "emphasis"
+    },
+    {
+      "id": "creating-session",
+      "from": "creating",
+      "to": "session_running",
+      "variant": "emphasis"
+    },
+    {
+      "id": "session-verifying",
+      "from": "session_running",
+      "to": "verifying",
+      "variant": "emphasis"
+    },
+    {
+      "id": "verifying-verified",
+      "from": "verifying",
+      "to": "verified",
+      "variant": "emphasis"
+    },
+    {
+      "id": "session-cancelling",
+      "from": "session_running",
+      "to": "cancelling",
+      "variant": "security"
+    },
+    {
+      "id": "cancelling-timeout",
+      "from": "cancelling",
+      "to": "terminal_stop",
+      "variant": "security"
+    },
+    {
+      "id": "creating-policy",
+      "from": "creating",
+      "to": "policy_rejected",
+      "variant": "security",
+      "route": "drop"
+    },
+    {
+      "id": "verifying-failed",
+      "from": "verifying",
+      "to": "terminal_stop",
+      "variant": "security",
+      "route": "drop"
+    }
+  ],
+  "cards": []
+}

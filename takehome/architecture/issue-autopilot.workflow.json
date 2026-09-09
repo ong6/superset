@@ -1,0 +1,268 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Issue to Verified Pull Request",
+    "locale": "en",
+    "output": "issue-autopilot-workflow.html",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "triage",
+        "label": "Triage",
+        "focus": ["issue", "dispatch", "triage_session", "claim"],
+        "note": "Read-only triage proposes a bounded contract."
+      },
+      {
+        "id": "repair",
+        "label": "Repair",
+        "focus": ["claim", "fix_session"],
+        "note": "Authorization and a pinned SHA precede remediation."
+      },
+      {
+        "id": "proof",
+        "label": "Proof",
+        "focus": ["fix_session", "verify", "outcome"],
+        "note": "Observed PR facts and named CI decide success."
+      },
+      {
+        "id": "stops",
+        "label": "Exits",
+        "focus": ["excluded", "blocked", "failed"],
+        "note": "Excluded, blocked, stale, policy, and CI exits stay visible."
+      }
+    ],
+    "viewBox": [1400, 740]
+  },
+  "lanes": [
+    {
+      "id": "github",
+      "label": "GitHub"
+    },
+    {
+      "id": "controller",
+      "label": "Controller"
+    },
+    {
+      "id": "devin",
+      "label": "Devin"
+    },
+    {
+      "id": "evidence",
+      "label": "Exit",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intake",
+      "label": "Triage",
+      "fromCol": 0,
+      "toCol": 2
+    },
+    {
+      "id": "authorize",
+      "label": "Authorization",
+      "fromCol": 3,
+      "toCol": 3,
+      "variant": "security"
+    },
+    {
+      "id": "remediate",
+      "label": "Proof",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "groups": [
+    {
+      "id": "session_boundary",
+      "label": "No repo secrets",
+      "lane": "devin",
+      "fromCol": 2,
+      "toCol": 4,
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "issue",
+    "dispatch",
+    "triage_session",
+    "claim",
+    "fix_session",
+    "verify",
+    "outcome"
+  ],
+  "semanticChecks": {
+    "allowedRoots": ["issue"],
+    "allowedTerminals": ["outcome", "excluded", "blocked", "failed"],
+    "requiredPaths": [
+      {
+        "from": "issue",
+        "to": "outcome"
+      },
+      {
+        "from": "claim",
+        "to": "verify"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "issue",
+      "lane": "github",
+      "col": 0,
+      "type": "external",
+      "label": "Issue Event",
+      "brand": "github",
+      "width": 132
+    },
+    {
+      "id": "outcome",
+      "lane": "github",
+      "col": 5,
+      "type": "external",
+      "label": "Issue Status",
+      "brand": "github",
+      "width": 142
+    },
+    {
+      "id": "dispatch",
+      "lane": "controller",
+      "col": 1,
+      "type": "cloud",
+      "label": "Dispatch",
+      "brand": "github-actions",
+      "width": 132
+    },
+    {
+      "id": "claim",
+      "lane": "controller",
+      "col": 3,
+      "type": "security",
+      "label": "Claim",
+      "width": 136,
+      "yOffset": 18
+    },
+    {
+      "id": "verify",
+      "lane": "controller",
+      "col": 5,
+      "type": "security",
+      "label": "Verify",
+      "width": 142,
+      "yOffset": 18
+    },
+    {
+      "id": "triage_session",
+      "lane": "devin",
+      "col": 2,
+      "type": "backend",
+      "label": "Triage",
+      "width": 142
+    },
+    {
+      "id": "fix_session",
+      "lane": "devin",
+      "col": 4,
+      "type": "backend",
+      "label": "Repair",
+      "width": 148
+    },
+    {
+      "id": "excluded",
+      "lane": "evidence",
+      "col": 1,
+      "type": "external",
+      "label": "Excluded",
+      "width": 124
+    },
+    {
+      "id": "blocked",
+      "lane": "evidence",
+      "col": 4,
+      "type": "security",
+      "label": "Blocked",
+      "width": 142
+    },
+    {
+      "id": "failed",
+      "lane": "evidence",
+      "col": 5,
+      "type": "security",
+      "label": "Stop",
+      "width": 142
+    }
+  ],
+  "edges": [
+    {
+      "id": "issue-dispatch",
+      "from": "issue",
+      "to": "dispatch",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "dispatch-triage",
+      "from": "dispatch",
+      "to": "triage_session",
+      "variant": "default",
+      "role": "main"
+    },
+    {
+      "id": "triage-claim",
+      "from": "triage_session",
+      "to": "claim",
+      "variant": "security",
+      "role": "main"
+    },
+    {
+      "id": "claim-fix",
+      "from": "claim",
+      "to": "fix_session",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "fix-verify",
+      "from": "fix_session",
+      "to": "verify",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "verify-outcome",
+      "from": "verify",
+      "to": "outcome",
+      "variant": "emphasis",
+      "role": "return"
+    },
+    {
+      "id": "dispatch-excluded",
+      "from": "dispatch",
+      "to": "excluded",
+      "label": "excluded",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "fix-blocked",
+      "from": "fix_session",
+      "to": "blocked",
+      "label": "blocked",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "verify-failed",
+      "from": "verify",
+      "to": "failed",
+      "label": "not verified",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": []
+}
