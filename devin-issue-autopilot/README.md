@@ -61,19 +61,24 @@ new or reopened issue
 
 ## GitHub Actions
 
-The `Devin issue automation` workflow handles opened, reopened, labeled, comment,
-and manual-dispatch events. Remediation requires a repository actor with
-`admin`, `maintain`, or `write` permission.
+The `Devin issue automation` workflow triages opened or reopened issues unless
+`devin-exclude` is present. Maintainers can request a fresh brief with
+`devin-triage` or manual `triage` dispatch. Remediation starts only when an
+authorized repository maintainer applies `devin-fix`/`devin-retry`, comments
+`/devin fix` or `/devin retry`, or manually dispatches `remediate`.
 
 Configure the repository under **Settings > Secrets and variables > Actions**:
 
 | Kind | Name | Value |
 |---|---|---|
-| Secret | `DEVIN_API_KEY` | `cog_...` key for a Devin service user with `UseDevinSessions` |
+| Secret | `DEVIN_API_KEY` | Writer service key used only for approved remediation |
+| Secret | `DEVIN_TRIAGE_API_KEY` | Separate read-only service key used only for triage |
 | Variable | `DEVIN_ORG_ID` | Devin organization ID used by the service user |
 
-GitHub access uses the workflow's short-lived `GITHUB_TOKEN`. The workflow
-serializes work per issue, uses visible claim labels, and writes terminal request
+GitHub access uses the workflow's short-lived `GITHUB_TOKEN`. Triage uses the
+separate read-only Devin identity, receives no session secrets, requires approval
+for actions, and is rejected if it opens a pull request. The workflow serializes
+work per issue, updates one durable lifecycle comment, and uses terminal request
 markers to prevent duplicate sessions.
 
 ## Reviewer walkthrough
@@ -88,8 +93,10 @@ or `devin-fix`. Follow the session and pull request links in the issue and run
 | Label or command | Behavior |
 |---|---|
 | `devin-exclude` | Prevents triage and remediation until removed |
+| `devin-triage` | Requests a fresh read-only readiness brief |
 | `devin-triaging` | Temporary visible claim for an active triage run |
 | `devin-triaged` | Triage brief was posted |
+| `devin-candidate` | A bounded remediation plan is ready for maintainer approval |
 | `devin-triage-bug` / `devin-triage-feature` / `devin-triage-docs` / `devin-triage-question` / `devin-triage-security` / `devin-triage-other` | Devin classification labels |
 | `devin-needs-info` | Reporter details are missing |
 | `devin-needs-maintainer` | Maintainer decision is required |
@@ -111,8 +118,10 @@ Acceptance command
 ```
 
 Triage can propose a contract when the issue does not provide one. Acceptance
-commands must use an allowed tool without shell operators, paths and CI checks
-must be allowlisted, and an explicit issue contract takes precedence.
+commands must use an allowed tool without shell operators, and paths and CI
+checks must be allowlisted. The default check is `unit-tests (current)`; add
+`CI check: <name>` under Expected to select another approved check. An explicit
+issue contract takes precedence.
 
 ## Commands
 
@@ -141,7 +150,7 @@ must be allowlisted, and an explicit issue contract takes precedence.
 | CI verification | Requires an open PR and successful named check run or commit status on its head SHA |
 | Issue linkage | Requires the pull request body to close the source issue |
 | Restart safety | Claims `new → creating` atomically, persists `session_id` before polling, and never blindly recreates it |
-| Idempotent output | Upserts one triage brief and rejects duplicate terminal request markers |
+| Idempotent output | Updates one durable lifecycle comment and rejects duplicate terminal request markers |
 | Label reconciliation | Removes trigger and conflicting terminal labels before applying the outcome |
 | Workflow claim | Serializes by issue and rejects existing triage or remediation claims |
 

@@ -3,21 +3,21 @@
     {
       "number": 1,
       "title": "Fix report execution reserve equality validation",
-      "body": "## Symptom\nEquality is accepted.\n\n## Expected\nCI check: `Python-Unit`\n\n## Allowed paths\n- `superset/utils/report_execution.py`\n\n## Acceptance command\npytest -q report-test",
+      "body": "## Symptom\nEquality is accepted.\n\n## Expected\nCI check: `unit-tests (current)`\n\n## Allowed paths\n- `superset/utils/report_execution.py`\n\n## Acceptance command\npytest -q report-test",
       "label_at": "2026-09-08T10:00:00Z",
       "labels": ["devin-fix"]
     },
     {
       "number": 2,
       "title": "Regenerate the dashboard title OpenAPI description",
-      "body": "## Symptom\nOpenAPI drift.\n\n## Expected\nCI check: `Check OpenAPI spec drift`\n\n## Allowed paths\n- `superset/dashboards/schemas.py`\n- `docs/static/resources/openapi.json`\n\n## Acceptance command\nsuperset update-api-docs",
+      "body": "## Symptom\nOpenAPI drift.\n\n## Expected\nCI check: `check-openapi-spec-drift`\n\n## Allowed paths\n- `superset/dashboards/schemas.py`\n- `docs/static/resources/openapi.json`\n\n## Acceptance command\nsuperset update-api-docs",
       "label_at": "2026-09-08T10:01:00Z",
       "labels": ["devin-fix"]
     },
     {
       "number": 3,
       "title": "Restore safe downgrade ordering for tables deleted_at",
-      "body": "## Symptom\nUnsafe downgrade.\n\n## Expected\nCI check: `Python-Unit`\n\n## Allowed paths\n- `superset/migrations/versions/2026-05-08_12-10_3a8e6f2c1b95_add_deleted_at_to_tables.py`\n\n## Acceptance command\npytest -q migration-test",
+      "body": "## Symptom\nUnsafe downgrade.\n\n## Expected\nCI check: `unit-tests (current)`\n\n## Allowed paths\n- `superset/migrations/versions/2026-05-08_12-10_3a8e6f2c1b95_add_deleted_at_to_tables.py`\n\n## Acceptance command\npytest -q migration-test",
       "label_at": "2026-09-08T10:02:00Z",
       "labels": ["devin-fix"]
     }

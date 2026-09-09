@@ -23,9 +23,17 @@ on:
   workflow_dispatch:
     inputs:
       issue_number:
-        description: "Issue number to remediate"
+        description: "Issue number to process"
         required: true
         type: number
+      mode:
+        description: "Run read-only triage or approved remediation"
+        required: true
+        default: triage
+        type: choice
+        options:
+          - triage
+          - remediate
 
 permissions:
   contents: read
@@ -42,7 +50,8 @@ jobs:
        (github.event.action == 'opened' ||
         github.event.action == 'reopened' ||
         (github.event.action == 'labeled' &&
-         (github.event.label.name == 'devin-fix' ||
+         (github.event.label.name == 'devin-triage' ||
+          github.event.label.name == 'devin-fix' ||
           github.event.label.name == 'devin-retry')))) ||
       github.event_name == 'issue_comment'
     runs-on: ubuntu-latest
@@ -58,6 +67,8 @@ jobs:
       - name: Authorize and claim issue
         id: claim
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          AUTOPILOT_DISPATCH_MODE: ${{ inputs.mode }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -83,8 +94,10 @@ jobs:
             const labelDefinitions = [
               ["devin-fix", "ededed", "Authorized maintainer requested bounded remediation"],
               ["devin-retry", "D4C5F9", "Start a new bounded remediation generation"],
+              ["devin-triage", "BFD4F2", "Request a new read-only Devin readiness brief"],
               ["devin-verified", "0E8A16", "Remediation PR passed configured verification"],
               ["devin-needs-human", "B60205", "Remediation stopped and needs maintainer attention"],
+              ["devin-candidate", "2DA44E", "Issue has a bounded remediation plan ready for approval"],
               ["devin-running", "1D76DB", "A bounded Devin remediation run owns this issue"],
               ["devin-exclude", "000000", "Opt this issue out of Devin automation"],
               ["devin-triaging", "FBCA04", "A bounded Devin triage run owns this issue"],
@@ -136,8 +149,8 @@ jobs:
             const event = context.eventName;
             const action = context.payload.action || "";
             if (event === "workflow_dispatch") {
-              mode = "remediate";
-              purpose = "fix";
+              mode = process.env.AUTOPILOT_DISPATCH_MODE;
+              purpose = mode === "triage" ? "triage" : "fix";
               requestedAt = new Date().toISOString();
             } else if (event === "issues") {
               if (action === "opened" || action === "reopened") {
@@ -147,10 +160,18 @@ jobs:
                   context.payload.issue.created_at;
               } else if (
                 action === "labeled" &&
-                ["devin-fix", "devin-retry"].includes(context.payload.label.name)
+                ["devin-triage", "devin-fix", "devin-retry"].includes(
+                  context.payload.label.name,
+                )
               ) {
-                mode = "remediate";
-                purpose = context.payload.label.name === "devin-retry" ? "retry" : "fix";
+                mode = context.payload.label.name === "devin-triage"
+                  ? "triage"
+                  : "remediate";
+                purpose = context.payload.label.name === "devin-retry"
+                  ? "retry"
+                  : mode === "triage"
+                    ? "triage"
+                    : "fix";
                 requestedAt = context.payload.issue.updated_at ||
                   new Date().toISOString();
               } else {
@@ -292,7 +313,8 @@ jobs:
           AUTOPILOT_PURPOSE: ${{ steps.claim.outputs.purpose }}
           AUTOPILOT_REQUEST_ACTOR: ${{ steps.claim.outputs.actor }}
           AUTOPILOT_REQUEST_AT: ${{ steps.claim.outputs.requested_at }}
-          DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
+          DEVIN_API_KEY: ${{ steps.claim.outputs.mode == 'remediate' && secrets.DEVIN_API_KEY || '' }}
+          DEVIN_TRIAGE_API_KEY: ${{ steps.claim.outputs.mode == 'triage' && secrets.DEVIN_TRIAGE_API_KEY || '' }}
           DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
