@@ -17,82 +17,150 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Devin Event-Driven Automation Take-Home
+# GitHub Issue Remediation Pilot
 
-This directory captures the discovery, implemented reviewer slice, and
-production-hardening design for an issue-remediation automation built around
-the Devin API and this Superset fork.
+## Executive overview
 
-## Working implementation
+We built a bounded workflow that turns a GitHub issue into a reviewable,
+independently verified pull request without asking maintainers to leave GitHub.
+The pilot combines automatic issue triage with explicit human authorization,
+Devin-led investigation and implementation, repository-owned CI, and a visible
+audit trail.
 
-The current take-home is the polling controller in
-[Devin Issue Autopilot](../devin-issue-autopilot/README.md):
+The outcome is not unrestricted autonomous development. It is a controlled
+delegation model: maintainers decide which issues may proceed, the automation
+limits what can change, and existing review and branch-protection processes
+remain authoritative.
+
+## The client problem
+
+An accepted engineering issue still requires someone to:
+
+1. understand and classify the report;
+2. collect missing reproduction and acceptance details;
+3. identify the relevant code and checks;
+4. implement a focused change;
+5. open and explain a pull request; and
+6. monitor CI and return the result to the issue.
+
+These handoffs create repeated context gathering and make it difficult to
+delegate safely. Maintainers need a way to reduce that work without losing
+control over scope, quality, security, or merge decisions.
+
+The repository confirms that Superset has a large, heterogeneous codebase and
+CI surface. The size of the time or throughput opportunity has not yet been
+measured; establishing that baseline is part of the pilot.
+
+## What we delivered
+
+### Automatic issue triage
+
+New and reopened issues can receive a bounded Devin triage session. The workflow
+classifies the request, identifies missing information, and proposes a narrow
+remediation contract covering allowed files, an acceptance command, and the CI
+check that should prove the result.
+
+### Maintainer-controlled remediation
+
+No repair starts from an ordinary public issue alone. A maintainer with write
+access must explicitly authorize it with `/devin fix`, `devin-fix`, or a manual
+workflow dispatch. Maintainers can exclude an issue or request a separate retry.
+
+### Bounded implementation
+
+The controller creates one Devin session against an immutable default-branch
+revision. It validates the issue contract, restricts changed paths and commands,
+sets time and ACU limits, and does not pass GitHub or repository secrets into
+the session.
+
+### Independent proof
+
+A run is successful only when the resulting pull request:
+
+- targets the expected repository revision;
+- changes only approved paths;
+- closes the source issue;
+- reports a consistent pull request and file list; and
+- passes the named repository CI check.
+
+Devin's own completion message is not treated as proof.
+
+### Observable operation
+
+GitHub labels and comments show triage, active work, verified completion, or the
+need for human attention. SQLite records runs and state transitions, while the
+report command summarizes elapsed time, ACU use, pull requests, CI, and outcomes.
+Duplicate events are claimed and reconciled rather than starting duplicate
+sessions.
+
+### Repeatable demonstration
+
+The repository includes a credential-free simulation, automated coverage for
+success and guardrail failures, and three deterministic Superset examples:
+
+- report-execution boundary validation;
+- generated OpenAPI drift; and
+- database migration downgrade ordering.
+
+## How the workflow operates
 
 ```text
-issue opened/reopened unless `devin-exclude`
-  -> one bounded Devin API v3 session uses `superset-issue-triage`
-  -> controller upserts a classification and proposed contract
-  -> maintainer comments `/devin fix` or applies `devin-fix`
-  -> controller claims the remediation event in SQLite
-  -> one bounded Devin API v3 session uses `superset-issue-fix`
-  -> Devin opens one scoped pull request
-  -> controller checks issue linkage, PR paths, and the named CI check
-  -> controller comments, relabels the issue, and records the report
+issue opened or reopened
+  -> bounded triage and proposed scope
+  -> maintainer authorizes a fix
+  -> controller validates and claims the request
+  -> bounded Devin session investigates and opens one pull request
+  -> controller verifies scope, issue linkage, and repository CI
+  -> GitHub records the outcome for the maintainer
 ```
 
-This is the authoritative reviewer path. It is deliberately smaller than the
-production-hardening design: GitHub Actions dispatches events, but there is no
-external webhook service, queue, controlled publisher, or clean-room patch
-sandbox in the implemented slice.
+The implementation is in
+[Devin Issue Autopilot](../devin-issue-autopilot/README.md), with GitHub event
+wiring in the repository workflow and reusable triage and repair procedures in
+the Devin skills.
 
-The three issue fixtures are in
-[`devin-issue-autopilot/issues/`](../devin-issue-autopilot/issues/), and the
-bounded repair procedure is
-[`superset-issue-fix`](../.devin/skills/superset-issue-fix/SKILL.md).
+## Goals
 
-## Documents
+1. **Reduce issue-to-review effort.** Automate repetitive triage, investigation,
+   implementation, and status work for suitable issues.
+2. **Preserve human ownership.** Keep authorization, review, merge, and policy
+   decisions with maintainers.
+3. **Make outcomes trustworthy.** Require deterministic acceptance criteria and
+   independent repository checks.
+4. **Fit the existing workflow.** Use GitHub issues, pull requests, labels,
+   comments, and CI rather than introducing a separate interface.
+5. **Create an evidence-based expansion path.** Measure value and failure modes
+   before increasing scope or permissions.
 
-1. [Product goal and production success criteria](01-goal.md)
-2. [Evaluated automation ideas](02-ideas.md)
-3. [Superset codebase overview](03-codebase-overview.md)
-4. [Architecture map](architecture/README.md)
-5. [Production-hardening recommendation](04-recommendation.md)
-6. [Prior candidate comparison](05-three-idea-evaluation.md)
-7. [Future CI-rescue technical specification](06-failing-check-repair-technical-spec.md)
-8. [Future CI-rescue test cases](07-ready-for-review-ci-cases.md)
-9. [Future CI-rescue implementation design](08-product-implementation-design.md)
-10. [Issue-remediation production design](09-github-issue-remediation-implementation.md)
+## Current boundary
 
-## Direction
+The delivered pilot is intentionally limited to one repository and narrowly
+scoped issues. It does not merge changes, bypass branch protection, repair every
+public issue, or provide a multi-repository control plane.
 
-The product direction is **GitHub Issue Remediation**. The working take-home
-proves that a maintainer can authorize a narrowly scoped issue and receive one
-bounded Devin session, one pull request, independent CI verification, and an
-observable outcome.
+The current GitHub Actions job and controller form a working reviewer slice.
+Production hardening would separate patch generation from publication, verify
+changes in a clean sandbox, improve cancellation and recovery, and introduce a
+durable queue or service only when scale requires it.
 
-The design documents describe how to harden that proof:
+## Recommended pilot
 
-- move GitHub Actions dispatch into a durable event queue and reconciler;
-- pin and reproduce an immutable target before session creation;
-- keep repository publishing credentials outside Devin;
-- have Devin return a patch rather than publish directly;
-- verify in a clean sandbox before a controlled writer opens the PR; and
-- add cancellation, richer status, policy versions, and production telemetry.
+Run the workflow on a small set of maintainer-approved issues and compare it
+with the existing process. Capture:
 
-The earlier failing-check, rebase, release, and migration analyses remain
-useful evaluated options and future trigger adapters. They are not the selected
-first implementation and should not be read as overriding the issue-to-PR
-goal.
+- time from authorization to reviewable pull request;
+- maintainer effort before and after automation;
+- acceptance and merge rates;
+- CI pass rate and policy rejection reasons;
+- duplicate, timeout, cancellation, and escalation behavior; and
+- ACU usage per accepted outcome.
 
-## Devin skills
+Agree on target thresholds, stop conditions, and an owner before the pilot.
+Expand to more issues or repositories only after the evidence supports it.
 
-- [FDE customer-value demo](../.devin/skills/fde-customer-value-demo/SKILL.md)
-  steers discovery and presentation toward evidenced customer value, adoption,
-  and a credible trust path.
-- [Event-driven remediation demo](../.devin/skills/event-driven-remediation-demo/SKILL.md)
-  supplies the reusable safety, session-management, verification, testing, and
-  observability checklist.
-- [Superset issue triage](../.devin/skills/superset-issue-triage/SKILL.md)
-  classifies incoming issues and proposes a bounded maintainer contract.
-- [Superset issue fix](../.devin/skills/superset-issue-fix/SKILL.md) is the
-  procedure used by the implemented controller.
+## Longer-term direction
+
+The same controlled remediation platform can later support failed-CI repair,
+dependency maintenance, migration issues, release work, or other deterministic
+engineering tasks. Those are expansion options, not claims about the current
+implementation.
