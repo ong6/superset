@@ -34,9 +34,9 @@ pytest -q tests/unit_tests/migrations/test_add_deleted_at_to_tables.py
 
 ## Expected
 
-Downgrade removes the index before the column and the `Python-Unit` check passes.
+Downgrade removes the index before the column and the `unit-tests (current)` check passes.
 
-CI check: `Python-Unit`
+CI check: `unit-tests (current)`
 
 ## Allowed paths
 

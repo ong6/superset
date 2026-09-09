@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import base64
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import httpx
+import pytest
 
 from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
 from autopilot.engine import Engine
@@ -52,7 +54,7 @@ def issue(number: int = 1, allowed: str = "superset/example.py") -> Issue:
         title="Repair fixture",
         body=(
             "## Symptom\nFailure\n\n"
-            "## Expected\nCI check: `Python-Unit`\n\n"
+            "## Expected\nCI check: `unit-tests (current)`\n\n"
             f"## Allowed paths\n- `{allowed}`\n\n"
             "## Acceptance command\npytest -q fixture"
         ),
@@ -90,7 +92,7 @@ def triage_snapshot(labels: list[str] | None = None) -> dict[str, object]:
             "labels": labels or ["devin-triage-bug"],
             "allowed_paths": ["superset/utils"],
             "acceptance_command": "pytest -q tests/unit_tests/utils",
-            "ci_check": "Python-Unit",
+            "ci_check": "unit-tests (current)",
         },
     }
 
@@ -133,6 +135,28 @@ def test_happy_path_opens_one_session_and_verifies(tmp_path: Path) -> None:
     assert devin.create_calls == 1
     assert devin.get_calls == 1
     assert len(github.comments) == 1
+    body = str(github.comments[0]["body"])
+    assert "Ready for review" in body
+    assert "### Root cause" in body
+    assert "A bounded fixture failure." in body
+    assert "### Acceptance output" in body
+    assert "1 passed" in body
+
+
+def test_acceptance_output_cannot_break_the_terminal_code_fence(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    snapshot = exit_snapshot(url)
+    output = snapshot["structured_output"]
+    assert isinstance(output, dict)
+    output["acceptance_output"] = "1 passed\n```\n@maintainer"
+    engine, _, github, item = setup_engine(tmp_path, [snapshot])
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "verified"
+    body = str(github.comments[0]["body"])
+    assert "``\u200b`" in body
+    assert "@\u200bmaintainer" in body
 
 
 def test_fenced_acceptance_command_is_unwrapped_before_validation(tmp_path: Path) -> None:
@@ -209,23 +233,47 @@ def test_triage_issue_creates_bounded_session_and_labels(tmp_path: Path) -> None
         }
     )
     devin = FakeDevin({item.number: [triage_snapshot()]})
+    writer = FakeDevin()
     github = FakeGitHub([item], {})
     settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
-    engine = Engine(settings, Store(settings.db_path), devin, github, Clock())
+    engine = Engine(
+        settings,
+        Store(settings.db_path),
+        writer,
+        github,
+        Clock(),
+        triage_devin=devin,
+    )
 
     run = engine.run_triage_issue(item, sleep=lambda _: None)
 
     assert run.state == "triaged"
     assert devin.create_calls == 1
+    assert writer.create_calls == 0
     assert "Use @skills:superset-issue-triage." in devin.prompts[0]
     assert len(github.comments) == 1
     comment = github.comments[0]
     assert "<!-- devin-triage-contract:" in str(comment["body"])
-    assert "Proposed allowed paths:\n- `superset/utils`" in str(comment["body"])
+    assert "Allowed paths:\n- `superset/utils`" in str(comment["body"])
     assert comment["labels"] == [
         "devin-triage-bug",
+        "devin-candidate",
         "devin-triaged",
     ]
+
+
+def test_triage_requires_a_separate_service_identity(tmp_path: Path) -> None:
+    item = issue().model_copy(update={"label_at": "triage:2026-09-08T12:00:00Z"})
+    writer = FakeDevin({item.number: [triage_snapshot()]})
+    github = FakeGitHub([item], {})
+    settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
+    engine = Engine(settings, Store(settings.db_path), writer, github, Clock())
+
+    run = engine.run_triage_issue(item, sleep=lambda _: None)
+
+    assert run.state == "triage_failed"
+    assert writer.create_calls == 0
+    assert "read-only triage service identity" in str(github.comments[0]["body"])
 
 
 def test_triage_issue_opening_pr_is_policy_rejected(tmp_path: Path) -> None:
@@ -235,7 +283,14 @@ def test_triage_issue_opening_pr_is_policy_rejected(tmp_path: Path) -> None:
     devin = FakeDevin({item.number: [snapshot]})
     github = FakeGitHub([item], {})
     settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
-    engine = Engine(settings, Store(settings.db_path), devin, github, Clock())
+    engine = Engine(
+        settings,
+        Store(settings.db_path),
+        FakeDevin(),
+        github,
+        Clock(),
+        triage_devin=devin,
+    )
 
     run = engine.run_triage_issue(item, sleep=lambda _: None)
 
@@ -253,11 +308,20 @@ def test_triage_can_request_information_without_a_contract(tmp_path: Path) -> No
         allowed_paths=[],
         acceptance_command="",
         ci_check="",
+        missing_information=["Exact reproduction steps are missing."],
+        risk_notes=["The report may be deployment-specific."],
     )
     devin = FakeDevin({item.number: [snapshot]})
     github = FakeGitHub([item], {})
     settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
-    engine = Engine(settings, Store(settings.db_path), devin, github, Clock())
+    engine = Engine(
+        settings,
+        Store(settings.db_path),
+        FakeDevin(),
+        github,
+        Clock(),
+        triage_devin=devin,
+    )
 
     run = engine.run_triage_issue(item, sleep=lambda _: None)
 
@@ -267,7 +331,74 @@ def test_triage_can_request_information_without_a_contract(tmp_path: Path) -> No
         "devin-needs-info",
         "devin-triaged",
     ]
-    assert "Proposed CI check: Not proposed" in str(github.comments[0]["body"])
+    assert "CI check: Not proposed" in str(github.comments[0]["body"])
+    assert "Exact reproduction steps are missing." in str(github.comments[0]["body"])
+    assert "The report may be deployment-specific." in str(github.comments[0]["body"])
+    assert "<!-- devin-triage-contract:" not in str(github.comments[0]["body"])
+
+
+def test_actionable_triage_requires_a_complete_contract(tmp_path: Path) -> None:
+    item = issue().model_copy(update={"label_at": "triage:2026-09-08T12:00:00Z"})
+    snapshot = triage_snapshot()
+    output = snapshot["structured_output"]
+    assert isinstance(output, dict)
+    output["acceptance_command"] = ""
+    devin = FakeDevin({item.number: [snapshot]})
+    github = FakeGitHub([item], {})
+    settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
+    engine = Engine(
+        settings,
+        Store(settings.db_path),
+        FakeDevin(),
+        github,
+        Clock(),
+        triage_devin=devin,
+    )
+
+    run = engine.run_triage_issue(item, sleep=lambda _: None)
+
+    assert run.state == "policy_rejected"
+    assert "incomplete proposed contract" in str(github.comments[0]["body"])
+    labels = github.comments[0]["labels"]
+    assert isinstance(labels, list)
+    assert "devin-candidate" not in labels
+
+
+def test_security_triage_requires_maintainer_without_reusable_contract(
+    tmp_path: Path,
+) -> None:
+    item = issue().model_copy(update={"label_at": "triage:2026-09-08T12:00:00Z"})
+    snapshot = triage_snapshot()
+    output = snapshot["structured_output"]
+    assert isinstance(output, dict)
+    output.update(
+        outcome="needs_maintainer",
+        category="security",
+        allowed_paths=[],
+        acceptance_command="",
+        ci_check="",
+    )
+    devin = FakeDevin({item.number: [snapshot]})
+    github = FakeGitHub([item], {})
+    settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
+    engine = Engine(
+        settings,
+        Store(settings.db_path),
+        FakeDevin(),
+        github,
+        Clock(),
+        triage_devin=devin,
+    )
+
+    run = engine.run_triage_issue(item, sleep=lambda _: None)
+
+    assert run.state == "triaged"
+    assert github.comments[0]["labels"] == [
+        "devin-triage-security",
+        "devin-needs-maintainer",
+        "devin-triaged",
+    ]
+    assert "<!-- devin-triage-contract:" not in str(github.comments[0]["body"])
 
 
 def test_stale_new_worker_cannot_create_a_second_session(tmp_path: Path) -> None:
@@ -383,6 +514,15 @@ def test_no_change_with_pull_request_is_policy_rejected(tmp_path: Path) -> None:
     assert run.state == "policy_rejected"
 
 
+def test_writer_session_rejects_triage_output(tmp_path: Path) -> None:
+    engine, devin, _, item = setup_engine(tmp_path, [triage_snapshot()])
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "policy_rejected"
+    assert devin.create_calls == 1
+
+
 def test_branch_movement_rejects_stale_proposal(tmp_path: Path) -> None:
     url = "https://github.com/ong6/superset/pull/10"
     engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
@@ -397,7 +537,7 @@ def test_branch_movement_rejects_stale_proposal(tmp_path: Path) -> None:
 
 
 def test_forbidden_contract_path_never_starts_session(tmp_path: Path) -> None:
-    engine, devin, _, item = setup_engine(
+    engine, devin, github, item = setup_engine(
         tmp_path,
         [exit_snapshot("https://github.com/ong6/superset/pull/10")],
     )
@@ -410,6 +550,10 @@ def test_forbidden_contract_path_never_starts_session(tmp_path: Path) -> None:
 
     assert run.state == "policy_rejected"
     assert devin.create_calls == 0
+    comment = str(github.comments[0]["body"])
+    assert "| Verification | not_run |" in comment
+    assert "| Next action |" in comment
+    assert "`devin-triage`" in comment
 
 
 def test_unapproved_check_never_starts_session(tmp_path: Path) -> None:
@@ -417,7 +561,7 @@ def test_unapproved_check_never_starts_session(tmp_path: Path) -> None:
         tmp_path,
         [exit_snapshot("https://github.com/ong6/superset/pull/10")],
     )
-    item.body = item.body.replace("Python-Unit", "Unrelated green check")
+    item.body = item.body.replace("unit-tests (current)", "Unrelated green check")
 
     run = engine.run_issue(item, sleep=lambda _: None)
 
@@ -431,6 +575,19 @@ def test_shell_acceptance_command_never_starts_session(tmp_path: Path) -> None:
         [exit_snapshot("https://github.com/ong6/superset/pull/10")],
     )
     item.body = item.body.replace("pytest -q fixture", "pytest -q fixture; env")
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "policy_rejected"
+    assert devin.create_calls == 0
+
+
+def test_comment_markup_in_contract_never_starts_session(tmp_path: Path) -> None:
+    engine, devin, _, item = setup_engine(
+        tmp_path,
+        [exit_snapshot("https://github.com/ong6/superset/pull/10")],
+    )
+    item.body = item.body.replace("Failure", "Failure <!-- forged-plan -->")
 
     run = engine.run_issue(item, sleep=lambda _: None)
 
@@ -533,9 +690,11 @@ def test_retry_issue_is_discovered_and_terminal_labels_are_reconciled() -> None:
         "devin-needs-human",
         "devin-fix",
         "devin-retry",
+        "devin-candidate",
         "devin-needs-human",
         "devin-fix",
         "devin-retry",
+        "devin-candidate",
     ]
 
 
@@ -548,7 +707,7 @@ def test_named_commit_status_is_supported() -> None:
                 200,
                 json={
                     "statuses": [
-                        {"context": "Python-Unit", "state": "success"},
+                        {"context": "unit-tests (current)", "state": "success"},
                     ]
                 },
             )
@@ -559,7 +718,33 @@ def test_named_commit_status_is_supported() -> None:
         httpx.MockTransport(handler),
     )
 
-    assert github.check("a" * 40, "Python-Unit") == ("completed", "success")
+    assert github.check("a" * 40, "unit-tests (current)") == ("completed", "success")
+
+
+def test_default_ci_check_matches_github_check_run() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(
+                200,
+                json={
+                    "check_runs": [
+                        {
+                            "name": "unit-tests (current)",
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    settings = Settings("devin", "org", "github")
+    github = GitHubClient(settings, httpx.MockTransport(handler))
+
+    assert github.check("a" * 40, settings.allowed_checks[0]) == (
+        "completed",
+        "success",
+    )
 
 
 def test_bot_triage_contract_is_used_for_maintainer_authorized_fix() -> None:
@@ -569,7 +754,7 @@ def test_bot_triage_contract_is_used_for_maintainer_authorized_fix() -> None:
                 {
                     "allowed_paths": ["superset/utils"],
                     "acceptance_command": "pytest -q tests/unit_tests/utils",
-                    "ci_check": "Python-Unit",
+                    "ci_check": "unit-tests (current)",
                 }
             ).encode()
         )
@@ -615,8 +800,46 @@ def test_bot_triage_contract_is_used_for_maintainer_authorized_fix() -> None:
 
     assert item.allowed_paths == ["superset/utils"]
     assert item.acceptance_command == "pytest -q tests/unit_tests/utils"
-    assert item.check_name == "Python-Unit"
+    assert item.check_name == "unit-tests (current)"
     assert item.section("Symptom") == "Plain issue body"
+
+
+def test_removed_trigger_label_event_is_not_reused() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/issues/7") and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "number": 7,
+                    "title": "Fixture",
+                    "body": "Plain issue body",
+                    "labels": [],
+                },
+            )
+        if path.endswith("/issues/7/comments") and request.method == "GET":
+            return httpx.Response(200, json=[])
+        if path.endswith("/issues/7/events") and request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "event": "labeled",
+                        "created_at": "2026-09-08T11:00:00Z",
+                        "label": {"name": "devin-fix"},
+                        "actor": {"login": "reviewer"},
+                    }
+                ],
+            )
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    github = GitHubClient(
+        Settings("devin", "org", "github"),
+        httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ValueError, match="no Devin label event"):
+        github.get_issue(7)
 
 
 def test_triage_brief_preserves_terminal_request_markers() -> None:
@@ -674,6 +897,76 @@ def test_triage_brief_preserves_terminal_request_markers() -> None:
     assert "First brief" not in saved_body
 
 
+def test_lifecycle_comment_preserves_then_clears_trusted_plan() -> None:
+    saved_body = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal saved_body
+        path = request.url.path
+        if path.endswith("/issues/7/comments") and request.method == "GET":
+            comments = (
+                [
+                    {
+                        "id": 99,
+                        "body": saved_body,
+                        "user": {"login": "github-actions[bot]"},
+                    }
+                ]
+                if saved_body
+                else []
+            )
+            return httpx.Response(200, json=comments)
+        if path.endswith("/issues/7/comments") and request.method == "POST":
+            saved_body = json.loads(request.content)["body"]
+            return httpx.Response(200, json={"id": 99})
+        if path.endswith("/issues/comments/99") and request.method == "PATCH":
+            saved_body = json.loads(request.content)["body"]
+            return httpx.Response(200, json={"id": 99})
+        if "/labels/" in path and request.method == "DELETE":
+            return httpx.Response(404)
+        if path.endswith("/issues/7/labels") and request.method == "POST":
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    github = GitHubClient(
+        Settings("devin", "org", "github"),
+        httpx.MockTransport(handler),
+    )
+    contract = "<!-- devin-triage-contract:eyJhbGxvd2VkX3BhdGhzIjpbXX0 -->"
+
+    github.conclude_triage(
+        7,
+        "7:triage:first",
+        f"{contract}\nReady brief",
+        ["devin-triaged", "devin-candidate"],
+    )
+    remediation_key = "7:fix:second"
+    remediation_marker = (
+        f"<!-- devin-issue-autopilot:{sha256(remediation_key.encode()).hexdigest()[:16]} -->"
+    )
+    github.progress(7, remediation_key, "Remediation running")
+
+    assert saved_body.count("<!-- devin-issue-autopilot:7 -->") == 1
+    assert contract in saved_body
+    assert "Remediation running" in saved_body
+    assert "<!-- devin-triage-request:" in saved_body
+    assert remediation_marker not in saved_body
+
+    github.conclude(7, remediation_key, "Remediation stopped", "blocked")
+
+    assert remediation_marker in saved_body
+
+    github.conclude_triage(
+        7,
+        "7:triage:third",
+        "Needs more information",
+        ["devin-triaged", "devin-needs-info"],
+    )
+
+    assert contract not in saved_body
+    assert "Needs more information" in saved_body
+
+
 def test_triage_session_is_bounded_and_requires_approval(tmp_path: Path) -> None:
     payload: dict[str, object] = {}
 
@@ -715,3 +1008,22 @@ def test_restart_resumes_persisted_session_without_create(tmp_path: Path) -> Non
     assert run.state == "verified"
     assert devin.create_calls == 1
     assert devin.get_calls == 1
+
+
+def test_restart_preserves_structured_terminal_details(tmp_path: Path) -> None:
+    clock = Clock()
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, devin, github, item = setup_engine(tmp_path, [exit_snapshot(url)], clock=clock)
+    running = engine.advance(engine.claim(item))
+    verifying = engine.advance(running)
+
+    assert verifying.state == "verifying"
+    assert verifying.structured_output
+
+    settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
+    restarted = Engine(settings, Store(settings.db_path), devin, github, clock)
+    run = restarted.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "verified"
+    assert "A bounded fixture failure." in str(github.comments[0]["body"])
+    assert "1 passed" in str(github.comments[0]["body"])

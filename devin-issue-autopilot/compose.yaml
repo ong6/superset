@@ -24,8 +24,9 @@ services:
     environment:
       AUTOPILOT_DB: /data/autopilot.db
       AUTOPILOT_DAILY_ACU_CAP: ${AUTOPILOT_DAILY_ACU_CAP:-20}
-      AUTOPILOT_ALLOWED_CHECKS: ${AUTOPILOT_ALLOWED_CHECKS:-Python-Unit,Check OpenAPI spec drift}
+      AUTOPILOT_ALLOWED_CHECKS: ${AUTOPILOT_ALLOWED_CHECKS:-unit-tests (current),check-openapi-spec-drift}
       DEVIN_API_KEY: ${DEVIN_API_KEY:-}
+      DEVIN_TRIAGE_API_KEY: ${DEVIN_TRIAGE_API_KEY:-}
       DEVIN_ORG_ID: ${DEVIN_ORG_ID:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_REPO: ${GITHUB_REPO:-ong6/superset}

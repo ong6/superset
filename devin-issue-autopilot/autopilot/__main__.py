@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -27,13 +28,22 @@ from autopilot.store import Store
 app = typer.Typer(no_args_is_help=True)
 
 
-def real_engine() -> Engine:
-    settings = Settings.from_env()
+def real_engine(
+    devin_key_env: str = "DEVIN_API_KEY",
+    triage_only: bool = False,
+) -> Engine:
+    settings = Settings.from_env(devin_key_env=devin_key_env)
+    devin = DevinClient(settings)
+    triage_devin = devin if triage_only else None
+    if not triage_only and os.getenv("DEVIN_TRIAGE_API_KEY"):
+        triage_settings = Settings.from_env(devin_key_env="DEVIN_TRIAGE_API_KEY")
+        triage_devin = DevinClient(triage_settings)
     return Engine(
         settings,
         Store(settings.db_path),
-        DevinClient(settings),
+        devin,
         GitHubClient(settings),
+        triage_devin=triage_devin,
     )
 
 
@@ -72,7 +82,7 @@ def triage(
     actor: str | None = typer.Option(None, "--actor"),
     requested_at: str | None = typer.Option(None, "--requested-at"),
 ) -> None:
-    engine = real_engine()
+    engine = real_engine("DEVIN_TRIAGE_API_KEY", triage_only=True)
     result = engine.run_triage_issue(engine.github.get_triage_issue(issue, actor, requested_at))
     typer.echo(f"{result.issue}: {result.state}")
     if result.state != "triaged":
