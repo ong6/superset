@@ -16,24 +16,24 @@
       },
       {
         "id": "repair",
-        "label": "Bounded repair",
+        "label": "Repair",
         "focus": ["claim", "fix_session"],
         "note": "Authorization and a pinned SHA precede remediation."
       },
       {
         "id": "proof",
-        "label": "Independent proof",
+        "label": "Proof",
         "focus": ["fix_session", "verify", "outcome"],
         "note": "Observed PR facts and named CI decide success."
       },
       {
         "id": "stops",
-        "label": "Fail-closed exits",
+        "label": "Exits",
         "focus": ["excluded", "blocked", "failed"],
         "note": "Excluded, blocked, stale, policy, and CI exits stay visible."
       }
     ],
-    "viewBox": [1400, 804]
+    "viewBox": [1400, 740]
   },
   "lanes": [
     {
