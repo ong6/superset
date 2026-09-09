@@ -15,37 +15,37 @@
     "views": [
       {
         "id": "triage-path",
-        "label": "Read-only triage",
+        "label": "Triage",
         "focus": ["issue", "actions", "policy", "controller", "triage", "outcome"],
         "note": "New issues receive a bounded readiness brief before a maintainer grants write scope."
       },
       {
         "id": "remediation-path",
-        "label": "Approved remediation",
+        "label": "Repair",
         "focus": ["issue", "actions", "policy", "controller", "remediation", "prci", "outcome"],
-        "note": "A maintainer-approved contract becomes one scoped Devin session and one reviewable pull request."
+        "note": "An approved contract becomes one scoped session and one pull request."
       },
       {
         "id": "verification-path",
-        "label": "Independent verification",
+        "label": "Proof",
         "focus": ["policy", "controller", "remediation", "prci", "outcome"],
-        "note": "The controller checks issue linkage, changed paths, the pinned base SHA, and the named GitHub check."
+        "note": "The controller checks linkage, paths, pinned SHA, and named CI."
       },
       {
         "id": "operations-path",
-        "label": "Operations and evidence",
+        "label": "Evidence",
         "focus": ["controller", "store", "report", "outcome"],
-        "note": "Durable transitions drive one living issue comment and a report of latency, ACUs, PR, CI, and outcome."
+        "note": "Durable transitions update issue status and the pilot report."
       }
     ],
-    "viewBox": [1360, 720]
+    "viewBox": [1360, 640]
   },
   "components": [
     {
       "id": "issue",
       "type": "external",
       "label": "GitHub Issue",
-      "sublabel": "approved contract",
+      "sublabel": "contract",
       "brand": "github",
       "pos": [30, 300],
       "size": [155, 70],
@@ -60,7 +60,7 @@
       "id": "actions",
       "type": "cloud",
       "label": "GitHub Actions",
-      "sublabel": "event dispatch + claim",
+      "sublabel": "dispatch + claim",
       "brand": "github-actions",
       "pos": [220, 300],
       "size": [145, 70],
@@ -75,8 +75,7 @@
       "id": "policy",
       "type": "security",
       "label": "Policy Gates",
-      "sublabel": "actor · contract · SHA",
-      "tag": "fail closed",
+      "sublabel": "actor · SHA",
       "pos": [400, 300],
       "size": [150, 70],
       "sources": [
@@ -90,8 +89,7 @@
       "id": "controller",
       "type": "backend",
       "label": "Autopilot Controller",
-      "sublabel": "Python state machine",
-      "tag": "poll + reconcile",
+      "sublabel": "state machine",
       "pos": [585, 300],
       "size": [160, 70],
       "sources": [
@@ -109,8 +107,7 @@
       "id": "triage",
       "type": "backend",
       "label": "Triage Session",
-      "sublabel": "read-only · 1 ACU",
-      "tag": "no PR",
+      "sublabel": "read-only",
       "pos": [782.5, 80],
       "size": [155, 70],
       "sources": [
@@ -124,8 +121,7 @@
       "id": "remediation",
       "type": "backend",
       "label": "Remediation Session",
-      "sublabel": "bounded Devin API v3",
-      "tag": "no secrets",
+      "sublabel": "bounded session",
       "pos": [780, 300],
       "size": [155, 70],
       "sources": [
@@ -143,7 +139,7 @@
       "id": "prci",
       "type": "cloud",
       "label": "Pull Request + CI",
-      "sublabel": "paths · linkage · check",
+      "sublabel": "paths · linkage · CI",
       "brand": "github",
       "pos": [970, 300],
       "size": [165, 70],
@@ -158,7 +154,7 @@
       "id": "outcome",
       "type": "external",
       "label": "Living Issue Status",
-      "sublabel": "comment + labels",
+      "sublabel": "comment · labels",
       "brand": "github",
       "pos": [1170, 300],
       "size": [160, 70],
@@ -173,7 +169,7 @@
       "id": "store",
       "type": "database",
       "label": "SQLite Run Store",
-      "sublabel": "runs + transitions",
+      "sublabel": "transitions",
       "pos": [585, 520],
       "size": [160, 70],
       "sources": [
@@ -281,33 +277,5 @@
       "to": "report"
     }
   ],
-  "cards": [
-    {
-      "dot": "cyan",
-      "title": "Demo spine",
-      "items": [
-        "The workflow begins and ends in the GitHub issue maintainers already use.",
-        "Read-only triage proposes a narrow contract before remediation is authorized.",
-        "The approved path produces one reviewable pull request rather than merging code."
-      ]
-    },
-    {
-      "dot": "rose",
-      "title": "Trust controls",
-      "items": [
-        "The controller validates actor permission, issue contract, allowed paths, and an immutable target SHA.",
-        "Devin sessions receive no secrets; GitHub and Devin credentials stay with the controller.",
-        "Structured output is treated as a proposal and cross-checked against observed pull-request facts."
-      ]
-    },
-    {
-      "dot": "emerald",
-      "title": "Deterministic proof",
-      "items": [
-        "Success requires issue linkage, an unchanged base SHA, policy-compliant changed files, and the named CI check.",
-        "SQLite records idempotent runs and append-only transitions for restart-safe reconciliation.",
-        "The issue comment and report expose session, pull request, CI, elapsed time, ACUs, and terminal outcome."
-      ]
-    }
-  ]
+  "cards": []
 }

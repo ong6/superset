@@ -10,30 +10,30 @@
     "views": [
       {
         "id": "triage",
-        "label": "Triage and approval",
+        "label": "Triage",
         "focus": ["issue", "dispatch", "triage_session", "claim"],
-        "note": "A read-only session turns a raw issue into a proposed bounded contract for maintainers."
+        "note": "Read-only triage proposes a bounded contract."
       },
       {
         "id": "repair",
         "label": "Bounded repair",
         "focus": ["claim", "fix_session"],
-        "note": "Authorization, idempotency, and a pinned target SHA precede the secretless remediation session."
+        "note": "Authorization and a pinned SHA precede remediation."
       },
       {
         "id": "proof",
         "label": "Independent proof",
         "focus": ["fix_session", "verify", "outcome"],
-        "note": "Observed pull-request facts and the named GitHub check—not the session's claim—decide success."
+        "note": "Observed PR facts and named CI decide success."
       },
       {
         "id": "stops",
         "label": "Fail-closed exits",
         "focus": ["excluded", "blocked", "failed"],
-        "note": "Excluded, duplicate, blocked, stale, policy-rejected, and CI-failed work terminates visibly."
+        "note": "Excluded, blocked, stale, policy, and CI exits stay visible."
       }
     ],
-    "viewBox": [1200, 860]
+    "viewBox": [1400, 804]
   },
   "lanes": [
     {
@@ -116,7 +116,6 @@
       "col": 0,
       "type": "external",
       "label": "Issue Event",
-      "sublabel": "open / reopen",
       "brand": "github",
       "width": 132
     },
@@ -126,7 +125,6 @@
       "col": 5,
       "type": "external",
       "label": "Issue Status",
-      "sublabel": "comment + labels",
       "brand": "github",
       "width": 142
     },
@@ -136,7 +134,6 @@
       "col": 1,
       "type": "cloud",
       "label": "Dispatch",
-      "sublabel": "event + permissions",
       "brand": "github-actions",
       "width": 132
     },
@@ -146,8 +143,6 @@
       "col": 3,
       "type": "security",
       "label": "Authorize + Claim",
-      "sublabel": "contract · pinned SHA",
-      "tag": "idempotent",
       "width": 136,
       "yOffset": 18
     },
@@ -157,8 +152,6 @@
       "col": 5,
       "type": "security",
       "label": "Independent Verify",
-      "sublabel": "PR facts + named CI",
-      "tag": "fail closed",
       "width": 142,
       "yOffset": 18
     },
@@ -168,8 +161,6 @@
       "col": 2,
       "type": "backend",
       "label": "Read-only Triage",
-      "sublabel": "structured output · 1 ACU",
-      "tag": "no PR",
       "width": 142
     },
     {
@@ -178,8 +169,6 @@
       "col": 4,
       "type": "backend",
       "label": "Scoped Remediation",
-      "sublabel": "structured output · one PR",
-      "tag": "no secrets",
       "width": 148
     },
     {
@@ -188,7 +177,6 @@
       "col": 1,
       "type": "external",
       "label": "Excluded",
-      "sublabel": "devin-exclude",
       "width": 124
     },
     {
@@ -197,7 +185,6 @@
       "col": 4,
       "type": "security",
       "label": "Blocked / Timeout",
-      "sublabel": "approval · input · limit",
       "width": 142
     },
     {
@@ -206,7 +193,6 @@
       "col": 5,
       "type": "security",
       "label": "Policy / CI Stop",
-      "sublabel": "stale · invalid · failed",
       "width": 142
     }
   ],
@@ -278,30 +264,5 @@
       "role": "error"
     }
   ],
-  "cards": [
-    {
-      "dot": "cyan",
-      "title": "One crisp demo story",
-      "items": [
-        "A raw issue becomes a maintainer-approved contract, one bounded repair session, and one pull request.",
-        "The final issue update links the session, pull request, CI result, elapsed time, ACUs, and outcome."
-      ]
-    },
-    {
-      "dot": "rose",
-      "title": "Safety before autonomy",
-      "items": [
-        "Write scope requires maintainer authorization, allowed paths, a named check, and a pinned default-branch SHA.",
-        "The controller retains credentials and suppresses duplicates before invoking remediation."
-      ]
-    },
-    {
-      "dot": "emerald",
-      "title": "Proof outside the session",
-      "items": [
-        "Structured output is cross-checked against the observed pull request.",
-        "Policy, stale-SHA, blocked, timeout, and CI failures remain visible terminal outcomes."
-      ]
-    }
-  ]
+  "cards": []
 }
