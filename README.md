@@ -17,6 +17,10 @@ specific language governing permissions and limitations
 under the License.
 -->
 
+## Take-home: GitHub Issue Remediation Pilot
+
+[Overview](takehome/README.md) · [Autopilot](devin-issue-autopilot/README.md) · [Actions workflow](https://github.com/ong6/superset/actions/workflows/devin-issue-autopilot.yml)
+
 # Superset
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/license/apache-2-0)

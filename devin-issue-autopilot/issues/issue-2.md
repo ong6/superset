@@ -19,43 +19,36 @@ under the License.
 
 # Title
 
-Regenerate the dashboard title OpenAPI description
+Restore safe downgrade ordering for tables deleted_at
 
 ## Symptom
 
-The dashboard title schema description changed without updating the committed OpenAPI
-artifact, so the drift check fails.
+The tables soft-delete migration removes `deleted_at` before its index during downgrade,
+which fails on databases that require the index to be removed first.
 
 ## Repro
 
 ```bash
-SUPERSET__SQLALCHEMY_DATABASE_URI='sqlite:///:memory:' \
-  FLASK_APP='superset.app:create_app()' \
-  superset update-api-docs
-git diff --exit-code -- docs/static/resources/openapi.json
+pytest -q tests/unit_tests/migrations/test_add_deleted_at_to_tables.py
 ```
 
 ## Expected
 
-The generated OpenAPI artifact matches the dashboard schema and the drift check passes.
+Downgrade removes the index before the column and the `unit-tests (current)` check passes.
 
-CI check: `check-openapi-spec-drift`
+CI check: `unit-tests (current)`
 
 ## Allowed paths
 
-- `superset/dashboards/schemas.py`
-- `docs/static/resources/openapi.json`
+- `superset/migrations/versions/2026-05-08_12-10_3a8e6f2c1b95_add_deleted_at_to_tables.py`
 
 ## Forbidden
 
-- Tests, CI workflows, requirements, and all paths not listed above.
-- Reverting the intended schema wording, force-pushing, or merging.
+- Tests, CI workflows, requirements, generated files, and all paths not listed above.
+- Skipping migration checks, force-pushing, or merging.
 
 ## Acceptance command
 
 ```bash
-SUPERSET__SQLALCHEMY_DATABASE_URI='sqlite:///:memory:' \
-  FLASK_APP='superset.app:create_app()' \
-  superset update-api-docs
-git diff --exit-code -- docs/static/resources/openapi.json
+pytest -q tests/unit_tests/migrations/test_add_deleted_at_to_tables.py
 ```

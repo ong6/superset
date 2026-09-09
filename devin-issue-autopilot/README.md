@@ -88,6 +88,15 @@ Confirm that triage posts a brief, then authorize remediation with `/devin fix`
 or `devin-fix`. Follow the session and pull request links in the issue and run
 `make report` to inspect the recorded result.
 
+## Live evidence
+
+| Issue | Session | PR | CI result | Outcome |
+|---|---|---|---|---|
+| [#13](https://github.com/ong6/superset/issues/13) | [4ece9ef5](https://app.devin.ai/sessions/4ece9ef53c7d4d5bbcba6613daa166dd) | [#14](https://github.com/ong6/superset/pull/14) | Passed | Verified |
+|  |  |  |  |  |
+|  |  |  |  |  |
+|  |  |  |  |  |
+
 ## Controls
 
 | Label or command | Behavior |
