@@ -17,35 +17,50 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Demo Runbook
+# Live Remediation Record
 
-Run the issues in this order: **#31, #30, #32**. Finish and merge each PR before
-starting the next issue. Verification pins `master`; if `master` moves during a
-run, the controller returns `stale_sha`.
+The integration owner is responsible for the pinned runs. Keep `master` stable
+while each controller verification is active; a changed target produces
+`stale_sha`. Review and merge are separate maintainer decisions after a
+CI/policy-ready-for-review outcome.
 
-## 1. Issue #31: report execution boundary
+## Boundaries
 
-1. Remove `devin-exclude` from
-   [#31](https://github.com/ong6/superset/issues/31).
-2. Comment `/devin fix`.
-3. Wait for the durable autopilot comment to reach a terminal outcome.
-4. Expect `ci_failed` because the #30 migration seed is still live.
-5. Read the failure, open the linked PR, and merge it.
-6. Confirm the merge is present on `master` before touching #30.
+- [#46](https://github.com/ong6/superset/pull/46) restores the testable
+  baseline. It is setup evidence, not an API-remediation success.
+- [#47](https://github.com/ong6/superset/pull/47) implements the reconstructed
+  living-status report. It is product evidence, not a repaired customer issue.
+- Issues #42 and #44 are synthetic setup fixtures.
+- [#13/#14](https://github.com/ong6/superset/issues/13) is README smoke
+  evidence.
 
-## 2. Issue #30: migration downgrade order
+## Current real issues
 
-1. Remove `devin-exclude` from
-   [#30](https://github.com/ong6/superset/issues/30).
-2. Comment `/devin fix`.
-3. Wait for the durable autopilot comment to reach a terminal outcome.
-4. Read the verification result, open the linked PR, and merge it.
-5. Confirm the merge is present on `master` before touching #32.
+At the **2026-09-09 18:34 UTC** snapshot, both issues were filed with
+`devin-exclude`; filing did not trigger a run.
 
-## 3. Issue #32: dedup doctest
+### 1. Issue #48: scheduled-report execution limits
 
-1. Remove `devin-exclude` from
-   [#32](https://github.com/ong6/superset/issues/32).
-2. Comment `/devin fix`.
-3. Wait for the durable autopilot comment to reach a terminal outcome.
-4. Read the verification result, open the linked PR, and merge it.
+- Issue: [#48](https://github.com/ong6/superset/issues/48)
+- Allowed paths: `superset/utils/report_execution.py` and its unit test
+- Acceptance:
+  `pytest -q tests/unit_tests/utils/test_report_execution.py -k non_finite`
+- Named CI: `unit-tests (current)`
+- API session, PR, acceptance output, CI result, and controller outcome: pending
+
+### 2. Issue #49: SQL Lab query limits
+
+- Issue: [#49](https://github.com/ong6/superset/issues/49)
+- Allowed paths: the two SQL Lab schema modules and their unit test
+- Acceptance:
+  `pytest -q tests/unit_tests/sqllab/test_schemas.py -k query_limit`
+- Named CI: `unit-tests (current)`
+- API session, PR, acceptance output, CI result, and controller outcome: pending
+
+## Evidence capture
+
+For each run, preserve the request key and pinned target SHA, Devin API session
+URL, generated PR and head SHA, acceptance output, named CI result, terminal
+controller comment, current merge state, elapsed time, and raw ACUs when
+reported. Keep missing values as `pending` or `unknown`; reported zero usage
+does not establish free work.
