@@ -29,18 +29,21 @@ The current take-home is the polling controller in
 [Devin Issue Autopilot](../devin-issue-autopilot/README.md):
 
 ```text
-maintainer applies `devin-fix`
-  -> controller claims the issue event in SQLite
+issue opened/reopened unless `devin-exclude`
+  -> one bounded Devin API v3 session uses `superset-issue-triage`
+  -> controller upserts a classification and proposed contract
+  -> maintainer comments `/devin fix` or applies `devin-fix`
+  -> controller claims the remediation event in SQLite
   -> one bounded Devin API v3 session uses `superset-issue-fix`
   -> Devin opens one scoped pull request
-  -> controller checks the PR paths and named CI check
+  -> controller checks issue linkage, PR paths, and the named CI check
   -> controller comments, relabels the issue, and records the report
 ```
 
 This is the authoritative reviewer path. It is deliberately smaller than the
-production-hardening design: there are no GitHub Actions workflows, webhook,
-queue, controlled publisher, immutable target-SHA preflight, or clean-room
-patch sandbox in the implemented slice.
+production-hardening design: GitHub Actions dispatches events, but there is no
+external webhook service, queue, controlled publisher, or clean-room patch
+sandbox in the implemented slice.
 
 The three issue fixtures are in
 [`devin-issue-autopilot/issues/`](../devin-issue-autopilot/issues/), and the
@@ -69,7 +72,7 @@ observable outcome.
 
 The design documents describe how to harden that proof:
 
-- replace polling with authenticated event dispatch and reconciliation;
+- move GitHub Actions dispatch into a durable event queue and reconciler;
 - pin and reproduce an immutable target before session creation;
 - keep repository publishing credentials outside Devin;
 - have Devin return a patch rather than publish directly;
@@ -89,5 +92,7 @@ goal.
 - [Event-driven remediation demo](../.devin/skills/event-driven-remediation-demo/SKILL.md)
   supplies the reusable safety, session-management, verification, testing, and
   observability checklist.
+- [Superset issue triage](../.devin/skills/superset-issue-triage/SKILL.md)
+  classifies incoming issues and proposes a bounded maintainer contract.
 - [Superset issue fix](../.devin/skills/superset-issue-fix/SKILL.md) is the
   procedure used by the implemented controller.

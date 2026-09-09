@@ -15,14 +15,15 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
 import httpx
 
-from autopilot.adapters import FakeDevin, FakeGitHub, GitHubClient
+from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
 from autopilot.engine import Engine
-from autopilot.models import Issue, Settings
+from autopilot.models import Issue, Run, SessionCreate, Settings
 from autopilot.store import Store
 
 
@@ -35,6 +36,14 @@ class Clock:
 
     def advance(self, seconds: float) -> None:
         self.value += seconds
+
+
+class AmbiguousDevin(FakeDevin):
+    def create(self, issue: Issue, run: Run, prompt: str) -> SessionCreate:
+        raise httpx.ConnectError(
+            "connection dropped",
+            request=httpx.Request("POST", "https://api.devin.ai/v3/sessions"),
+        )
 
 
 def issue(number: int = 1, allowed: str = "superset/example.py") -> Issue:
@@ -67,6 +76,25 @@ def exit_snapshot(url: str) -> dict[str, object]:
     }
 
 
+def triage_snapshot(labels: list[str] | None = None) -> dict[str, object]:
+    return {
+        "status": "exit",
+        "acus_consumed": 0.2,
+        "pull_requests": [],
+        "structured_output": {
+            "outcome": "triaged",
+            "category": "bug",
+            "confidence": "medium",
+            "summary": "The report describes a reproducible backend failure.",
+            "next_action": "Maintainer should confirm scope before requesting a fix.",
+            "labels": labels or ["devin-triage-bug"],
+            "allowed_paths": ["superset/utils"],
+            "acceptance_command": "pytest -q tests/unit_tests/utils",
+            "ci_check": "Python-Unit",
+        },
+    }
+
+
 def setup_engine(
     tmp_path: Path,
     plan: list[dict[str, object]],
@@ -82,6 +110,7 @@ def setup_engine(
             url: {
                 "head_sha": "a" * 40,
                 "files": files or ["superset/example.py"],
+                "body": "Fixes #1",
             }
         },
     )
@@ -104,6 +133,21 @@ def test_happy_path_opens_one_session_and_verifies(tmp_path: Path) -> None:
     assert devin.create_calls == 1
     assert devin.get_calls == 1
     assert len(github.comments) == 1
+
+
+def test_fenced_acceptance_command_is_unwrapped_before_validation(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, devin, _, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    item.body = item.body.replace(
+        "## Acceptance command\npytest -q fixture",
+        "## Acceptance command\n```bash\npytest -q fixture\n```",
+    )
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "verified"
+    assert item.acceptance_command == "pytest -q fixture"
+    assert devin.create_calls == 1
 
 
 def test_session_prompt_links_the_source_issue(tmp_path: Path) -> None:
@@ -138,6 +182,92 @@ def test_duplicate_label_does_not_create_second_session(tmp_path: Path) -> None:
     assert first.run_id == second.run_id
     assert devin.create_calls == 1
     assert len(github.comments) == 1
+
+
+def test_ambiguous_session_creation_stays_claimed_until_timeout(tmp_path: Path) -> None:
+    clock = Clock()
+    engine, _, _, item = setup_engine(tmp_path, [], clock=clock)
+    engine.devin = AmbiguousDevin({})
+
+    creating = engine.advance(engine.claim(item))
+
+    assert creating.state == "creating"
+    assert creating.comment_id is None
+
+    clock.advance(121)
+    finished = engine.advance(creating)
+
+    assert finished.state == "devin_error"
+    assert finished.comment_id is not None
+
+
+def test_triage_issue_creates_bounded_session_and_labels(tmp_path: Path) -> None:
+    item = issue().model_copy(
+        update={
+            "label_at": "triage:2026-09-08T12:00:00Z",
+            "label_actor": "reporter",
+        }
+    )
+    devin = FakeDevin({item.number: [triage_snapshot()]})
+    github = FakeGitHub([item], {})
+    settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
+    engine = Engine(settings, Store(settings.db_path), devin, github, Clock())
+
+    run = engine.run_triage_issue(item, sleep=lambda _: None)
+
+    assert run.state == "triaged"
+    assert devin.create_calls == 1
+    assert "Use @skills:superset-issue-triage." in devin.prompts[0]
+    assert len(github.comments) == 1
+    comment = github.comments[0]
+    assert "<!-- devin-triage-contract:" in str(comment["body"])
+    assert "Proposed allowed paths:\n- `superset/utils`" in str(comment["body"])
+    assert comment["labels"] == [
+        "devin-triage-bug",
+        "devin-triaged",
+    ]
+
+
+def test_triage_issue_opening_pr_is_policy_rejected(tmp_path: Path) -> None:
+    item = issue().model_copy(update={"label_at": "triage:2026-09-08T12:00:00Z"})
+    snapshot = triage_snapshot()
+    snapshot["pull_requests"] = [{"pr_url": "https://github.com/ong6/superset/pull/10"}]
+    devin = FakeDevin({item.number: [snapshot]})
+    github = FakeGitHub([item], {})
+    settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
+    engine = Engine(settings, Store(settings.db_path), devin, github, Clock())
+
+    run = engine.run_triage_issue(item, sleep=lambda _: None)
+
+    assert run.state == "policy_rejected"
+    assert github.comments[0]["labels"] == ["devin-triaged", "devin-needs-maintainer"]
+
+
+def test_triage_can_request_information_without_a_contract(tmp_path: Path) -> None:
+    item = issue().model_copy(update={"label_at": "triage:2026-09-08T12:00:00Z"})
+    snapshot = triage_snapshot()
+    output = snapshot["structured_output"]
+    assert isinstance(output, dict)
+    output.update(
+        outcome="needs_info",
+        allowed_paths=[],
+        acceptance_command="",
+        ci_check="",
+    )
+    devin = FakeDevin({item.number: [snapshot]})
+    github = FakeGitHub([item], {})
+    settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
+    engine = Engine(settings, Store(settings.db_path), devin, github, Clock())
+
+    run = engine.run_triage_issue(item, sleep=lambda _: None)
+
+    assert run.state == "triaged"
+    assert github.comments[0]["labels"] == [
+        "devin-triage-bug",
+        "devin-needs-info",
+        "devin-triaged",
+    ]
+    assert "Proposed CI check: Not proposed" in str(github.comments[0]["body"])
 
 
 def test_stale_new_worker_cannot_create_a_second_session(tmp_path: Path) -> None:
@@ -215,6 +345,17 @@ def test_pr_touching_tests_is_policy_rejected(tmp_path: Path) -> None:
     assert run.state == "policy_rejected"
     assert devin.create_calls == 1
     assert devin.get_calls == 1
+
+
+def test_pr_must_close_the_source_issue(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    github.prs[url].body = "Related to #1"
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "policy_rejected"
+    assert "does not close issue #1" in str(github.comments[0]["body"])
 
 
 def test_structured_pr_url_mismatch_is_policy_rejected(tmp_path: Path) -> None:
@@ -350,7 +491,17 @@ def test_retry_issue_is_discovered_and_terminal_labels_are_reconciled() -> None:
         if request.method == "GET" and path.endswith("/collaborators/reviewer/permission"):
             return httpx.Response(200, json={"permission": "write"})
         if request.method == "GET" and path.endswith("/issues/7/comments"):
-            comments = [{"id": 99, "body": comment_body[0]}] if comment_body else []
+            comments = (
+                [
+                    {
+                        "id": 99,
+                        "body": comment_body[0],
+                        "user": {"login": "github-actions[bot]"},
+                    }
+                ]
+                if comment_body
+                else []
+            )
             return httpx.Response(200, json=comments)
         if request.method == "POST" and path.endswith("/issues/7/comments"):
             comment_body.append(json.loads(request.content)["body"])
@@ -409,6 +560,145 @@ def test_named_commit_status_is_supported() -> None:
     )
 
     assert github.check("a" * 40, "Python-Unit") == ("completed", "success")
+
+
+def test_bot_triage_contract_is_used_for_maintainer_authorized_fix() -> None:
+    contract = (
+        base64.urlsafe_b64encode(
+            json.dumps(
+                {
+                    "allowed_paths": ["superset/utils"],
+                    "acceptance_command": "pytest -q tests/unit_tests/utils",
+                    "ci_check": "Python-Unit",
+                }
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/issues/7") and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"number": 7, "title": "Fixture", "body": "Plain issue body"},
+            )
+        if path.endswith("/issues/7/comments") and request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 99,
+                        "body": f"<!-- devin-triage-contract:{contract} -->",
+                        "user": {"login": "github-actions[bot]"},
+                    },
+                    {
+                        "id": 100,
+                        "body": "<!-- devin-triage-contract:e30 -->",
+                        "user": {"login": "reporter"},
+                    },
+                ],
+            )
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    github = GitHubClient(
+        Settings("devin", "org", "github"),
+        httpx.MockTransport(handler),
+    )
+
+    item = github.get_issue(
+        7,
+        request_actor="maintainer",
+        requested_at="2026-09-08T12:00:00Z",
+    )
+
+    assert item.allowed_paths == ["superset/utils"]
+    assert item.acceptance_command == "pytest -q tests/unit_tests/utils"
+    assert item.check_name == "Python-Unit"
+    assert item.section("Symptom") == "Plain issue body"
+
+
+def test_triage_brief_preserves_terminal_request_markers() -> None:
+    saved_body = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal saved_body
+        path = request.url.path
+        if path.endswith("/issues/7/comments") and request.method == "GET":
+            comments = (
+                [
+                    {
+                        "id": 99,
+                        "body": saved_body,
+                        "user": {"login": "github-actions[bot]"},
+                    }
+                ]
+                if saved_body
+                else []
+            )
+            return httpx.Response(200, json=comments)
+        if path.endswith("/issues/7/comments") and request.method == "POST":
+            saved_body = json.loads(request.content)["body"]
+            return httpx.Response(200, json={"id": 99})
+        if path.endswith("/issues/comments/99") and request.method == "PATCH":
+            saved_body = json.loads(request.content)["body"]
+            return httpx.Response(200, json={"id": 99})
+        if "/labels/" in path and request.method == "DELETE":
+            return httpx.Response(404)
+        if path.endswith("/issues/7/labels") and request.method == "POST":
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected request: {request.method} {path}")
+
+    github = GitHubClient(
+        Settings("devin", "org", "github"),
+        httpx.MockTransport(handler),
+    )
+
+    github.conclude_triage(
+        7,
+        "7:triage:first",
+        "<!-- devin-triage-request:aaaaaaaaaaaaaaaa -->\nFirst brief",
+        ["devin-triaged"],
+    )
+    github.conclude_triage(
+        7,
+        "7:triage:second",
+        "<!-- devin-triage-request:bbbbbbbbbbbbbbbb -->\nSecond brief",
+        ["devin-triaged"],
+    )
+
+    assert "<!-- devin-triage-request:aaaaaaaaaaaaaaaa -->" in saved_body
+    assert "<!-- devin-triage-request:bbbbbbbbbbbbbbbb -->" in saved_body
+    assert "Second brief" in saved_body
+    assert "First brief" not in saved_body
+
+
+def test_triage_session_is_bounded_and_requires_approval(tmp_path: Path) -> None:
+    payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "session_id": "devin-triage",
+                "url": "https://app.devin.ai/sessions/devin-triage",
+            },
+        )
+
+    settings = Settings("devin", "org", "github", db_path=tmp_path / "autopilot.db")
+    item = issue().model_copy(update={"label_at": "triage:timestamp"})
+    run = Store(settings.db_path).claim(item, now=1)
+    client = DevinClient(settings, httpx.MockTransport(handler))
+
+    client.create_triage(item, run, "prompt")
+
+    assert payload["repos"] == ["ong6/superset"]
+    assert payload["max_acu_limit"] == 1
+    assert payload["bypass_approval"] is False
+    assert payload["secret_ids"] == []
+    assert payload["resumable"] is False
 
 
 def test_restart_resumes_persisted_session_without_create(tmp_path: Path) -> None:

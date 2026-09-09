@@ -72,14 +72,17 @@
   "prs": {
     "https://github.com/ong6/superset/pull/101": {
       "head_sha": "1111111111111111111111111111111111111111",
+      "body": "Fixes #1",
       "files": ["superset/utils/report_execution.py"]
     },
     "https://github.com/ong6/superset/pull/102": {
       "head_sha": "2222222222222222222222222222222222222222",
+      "body": "Fixes #2",
       "files": ["docs/static/resources/openapi.json"]
     },
     "https://github.com/ong6/superset/pull/103": {
       "head_sha": "3333333333333333333333333333333333333333",
+      "body": "Fixes #3",
       "files": ["superset/migrations/versions/2026-05-08_12-10_3a8e6f2c1b95_add_deleted_at_to_tables.py"]
     }
   }

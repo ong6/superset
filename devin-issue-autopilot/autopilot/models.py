@@ -48,7 +48,9 @@ class Issue(BaseModel):
 
     @property
     def acceptance_command(self) -> str:
-        return self.section("Acceptance command")
+        value = self.section("Acceptance command")
+        match = re.fullmatch(r"```[A-Za-z0-9_-]*\n(?P<command>.*?)\n```", value, re.DOTALL)
+        return match.group("command").strip() if match is not None else value
 
     @property
     def key(self) -> str:
@@ -66,6 +68,22 @@ class StructuredResult(BaseModel):
     files_changed: list[str] = Field(max_length=20)
 
 
+class TriageResult(BaseModel):
+    """Structured classification and proposed remediation contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["triaged", "needs_info", "needs_maintainer"]
+    category: Literal["bug", "feature", "docs", "question", "security", "other"]
+    confidence: Literal["low", "medium", "high"]
+    summary: str = Field(max_length=700)
+    next_action: str = Field(max_length=400)
+    labels: list[str] = Field(max_length=5)
+    allowed_paths: list[str] = Field(max_length=20)
+    acceptance_command: str = Field(max_length=500)
+    ci_check: str = Field(max_length=100)
+
+
 class SessionCreate(BaseModel):
     session_id: str
     url: str
@@ -80,11 +98,12 @@ class SessionSnapshot(BaseModel):
     status_detail: str | None = None
     acus_consumed: float = 0
     pull_requests: list[SessionPullRequest] = Field(default_factory=list)
-    structured_output: StructuredResult | None = None
+    structured_output: StructuredResult | TriageResult | None = None
 
 
 class PullRequest(BaseModel):
     state: str
+    body: str
     head_sha: str
     head_ref: str
     base_sha: str
@@ -120,6 +139,7 @@ class Run(BaseModel):
     pr_opened: float | None = None
     target_branch: str | None = None
     target_sha: str | None = None
+    summary: str = ""
 
     @property
     def issue_model(self) -> Issue:
@@ -140,13 +160,40 @@ class Settings:
     github_repo: str = "ong6/superset"
     db_path: Path = Path("autopilot.db")
     daily_acu_cap: float = 20
+    triage_acu_limit: int = 1
     allowed_checks: tuple[str, ...] = ("Python-Unit", "Check OpenAPI spec drift")
+    triage_labels: tuple[str, ...] = (
+        "devin-triage-bug",
+        "devin-triage-feature",
+        "devin-triage-docs",
+        "devin-triage-question",
+        "devin-triage-security",
+        "devin-triage-other",
+        "devin-needs-info",
+        "devin-needs-maintainer",
+        "devin-triaged",
+    )
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.github_repo) is None:
             raise ValueError("GITHUB_REPO must be an owner/repository name")
         if not self.allowed_checks:
             raise ValueError("At least one allowed CI check is required")
+        if self.triage_acu_limit <= 0:
+            raise ValueError("Triage ACU limit must be positive")
+        required_triage_labels = {
+            "devin-triage-bug",
+            "devin-triage-feature",
+            "devin-triage-docs",
+            "devin-triage-question",
+            "devin-triage-security",
+            "devin-triage-other",
+            "devin-needs-info",
+            "devin-needs-maintainer",
+            "devin-triaged",
+        }
+        if not required_triage_labels.issubset(self.triage_labels):
+            raise ValueError("AUTOPILOT_TRIAGE_LABELS must include every managed triage label")
 
     @classmethod
     def from_env(cls, fake: bool = False) -> "Settings":
@@ -161,6 +208,7 @@ class Settings:
             github_repo=os.getenv("GITHUB_REPO", "ong6/superset"),
             db_path=Path(os.getenv("AUTOPILOT_DB", "autopilot.db")),
             daily_acu_cap=float(os.getenv("AUTOPILOT_DAILY_ACU_CAP", "20")),
+            triage_acu_limit=int(os.getenv("AUTOPILOT_TRIAGE_ACU_LIMIT", "1")),
             allowed_checks=tuple(
                 check.strip()
                 for check in os.getenv(
@@ -168,6 +216,18 @@ class Settings:
                     "Python-Unit,Check OpenAPI spec drift",
                 ).split(",")
                 if check.strip()
+            ),
+            triage_labels=tuple(
+                label.strip()
+                for label in os.getenv(
+                    "AUTOPILOT_TRIAGE_LABELS",
+                    (
+                        "devin-triage-bug,devin-triage-feature,devin-triage-docs,"
+                        "devin-triage-question,devin-triage-security,devin-triage-other,"
+                        "devin-needs-info,devin-needs-maintainer,devin-triaged"
+                    ),
+                ).split(",")
+                if label.strip()
             ),
         )
 
@@ -195,5 +255,50 @@ def output_schema() -> dict[str, object]:
             "root_cause",
             "acceptance_output",
             "files_changed",
+        ],
+    }
+
+
+def triage_output_schema() -> dict[str, object]:
+    """Return the strict Devin triage output schema."""
+
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "outcome": {
+                "type": "string",
+                "enum": ["triaged", "needs_info", "needs_maintainer"],
+            },
+            "category": {
+                "type": "string",
+                "enum": ["bug", "feature", "docs", "question", "security", "other"],
+            },
+            "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+            "summary": {"type": "string", "maxLength": 700},
+            "next_action": {"type": "string", "maxLength": 400},
+            "labels": {
+                "type": "array",
+                "maxItems": 5,
+                "items": {"type": "string", "maxLength": 80},
+            },
+            "allowed_paths": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {"type": "string", "maxLength": 300},
+            },
+            "acceptance_command": {"type": "string", "maxLength": 500},
+            "ci_check": {"type": "string", "maxLength": 100},
+        },
+        "required": [
+            "outcome",
+            "category",
+            "confidence",
+            "summary",
+            "next_action",
+            "labels",
+            "allowed_paths",
+            "acceptance_command",
+            "ci_check",
         ],
     }
