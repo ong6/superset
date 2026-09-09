@@ -19,204 +19,149 @@ under the License.
 
 # GitHub Issue Remediation Pilot
 
-## Executive overview
+## WHAT
 
-We built a bounded workflow that turns a GitHub issue into a reviewable,
-independently verified pull request without asking maintainers to leave GitHub.
-The pilot combines automatic issue triage with explicit human authorization,
-Devin-led investigation and implementation, repository-owned CI, and a visible
-audit trail.
+**167 open issues.** Apache Superset also received 70 issues in the last 30
+days, or **16.3 issues per week**, and its 10 open issues carrying the `#bug`
+label have a **2.6-day median age**.
 
-The outcome is not unrestricted autonomous development. It is a controlled
-delegation model: maintainers decide which issues may proceed, the automation
-limits what can change, and existing review and branch-protection processes
-remain authoritative.
-
-## The client problem
-
-An accepted engineering issue still requires someone to:
-
-1. understand and classify the report;
-2. collect missing reproduction and acceptance details;
-3. identify the relevant code and checks;
-4. implement a focused change;
-5. open and explain a pull request; and
-6. monitor CI and return the result to the issue.
-
-These handoffs create repeated context gathering and make it difficult to
-delegate safely. Maintainers need a way to reduce that work without losing
-control over scope, quality, security, or merge decisions.
-
-The repository confirms that Superset has a large, heterogeneous codebase and
-CI surface. The size of the time or throughput opportunity has not yet been
-measured; establishing that baseline is part of the pilot.
-
-## What we delivered
-
-### Automatic issue triage
-
-New and reopened issues can receive a bounded Devin triage session. The workflow
-classifies the request, identifies missing information, and proposes a narrow
-remediation contract covering allowed files, an acceptance command, and the CI
-check that should prove the result.
-
-### Maintainer-controlled remediation
-
-No repair starts from an ordinary public issue alone. A maintainer with write
-access must explicitly authorize it with `/devin fix`, `devin-fix`, or a manual
-workflow dispatch. Maintainers can exclude an issue or request a separate retry.
-
-### Bounded implementation
-
-The controller creates one Devin session against an immutable default-branch
-revision. It validates the issue contract, restricts changed paths and commands,
-sets time and ACU limits, and does not pass GitHub or repository secrets into
-the session.
-
-### Independent proof
-
-A run is successful only when the resulting pull request:
-
-- targets the expected repository revision;
-- changes only approved paths;
-- closes the source issue;
-- reports a consistent pull request and file list; and
-- passes the named repository CI check.
-
-Devin's own completion message is not treated as proof.
-
-### Observable operation
-
-GitHub labels and comments show triage, active work, verified completion, or the
-need for human attention. SQLite records runs and state transitions, while the
-report command summarizes elapsed time, ACU use, pull requests, CI, and outcomes.
-Duplicate events are claimed and reconciled rather than starting duplicate
-sessions.
-
-### Repeatable demonstration
-
-The repository includes a credential-free simulation, automated coverage for
-success and guardrail failures, and three deterministic Superset examples:
-
-- report-execution boundary validation;
-- generated OpenAPI drift; and
-- database migration downgrade ordering.
-
-## How the workflow operates
-
-```text
-issue opened or reopened
-  -> bounded triage and proposed scope
-  -> maintainer authorizes a fix
-  -> controller validates and claims the request
-  -> bounded Devin session investigates and opens one pull request
-  -> controller verifies scope, issue linkage, and repository CI
-  -> GitHub records the outcome for the maintainer
-```
-
-The implementation is in
-[Devin Issue Autopilot](../devin-issue-autopilot/README.md), with GitHub event
-wiring in the repository workflow and reusable triage and repair procedures in
-the Devin skills.
-
-## Demo architecture diagrams
-
-Three Archify specifications present the implemented workflow:
-
-- [system architecture](architecture/issue-autopilot.architecture.json) for
-  boundaries, integrations, policy gates, and durable evidence;
-- [remediation workflow](architecture/issue-autopilot.workflow.json) for issue
-  intake, triage, authorization, repair, verification, and fail-closed exits;
-- [run lifecycle](architecture/issue-autopilot.lifecycle.json) for persisted
-  states, bounded cancellation, and terminal outcomes.
-
-The architecture evidence is pinned to repository revision
-`4708769acb61758b30e580522913a11a282afcb9`. Source links use the authenticated
-local Git proxy with `link_mode: local-only`. Generated HTML bundles and browser
-evidence are reproducible local outputs rather than checked-in artifacts.
-
-From the `archify` directory of a separate `tt-a1i/archify` checkout:
+These figures are a GitHub API snapshot taken on **2026-09-09 UTC**. The weekly
+rate is `70 / 30 * 7`; pull requests are excluded from the bug-age calculation.
 
 ```bash
-SUPERSET_REPO=/path/to/superset
-
-node bin/archify.mjs validate architecture \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.architecture.json" \
-  --quality showcase --repo-root "$SUPERSET_REPO" --json
-node bin/archify.mjs deliver architecture \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.architecture.json" \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot-architecture.html" \
-  --quality showcase --repo-root "$SUPERSET_REPO" --json
-
-node bin/archify.mjs validate workflow \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.workflow.json" \
-  --quality showcase --json
-node bin/archify.mjs deliver workflow \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.workflow.json" \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot-workflow.html" \
-  --quality showcase --json
-
-node bin/archify.mjs validate lifecycle \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.lifecycle.json" \
-  --quality showcase --json
-node bin/archify.mjs deliver lifecycle \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot.lifecycle.json" \
-  "$SUPERSET_REPO/takehome/architecture/issue-autopilot-lifecycle.html" \
-  --quality showcase --json
-
-for artifact in architecture workflow lifecycle; do
-  node bin/archify.mjs visual-check \
-    "$SUPERSET_REPO/takehome/architecture/issue-autopilot-$artifact.html" \
-    --json
-done
+gh api 'search/issues?q=repo%3Aapache%2Fsuperset+is%3Aissue+is%3Aopen&per_page=1'
+gh api 'search/issues?q=repo%3Aapache%2Fsuperset+is%3Aissue+created%3A2026-08-10T13%3A31%3A00Z..2026-09-09T13%3A31%3A00Z&per_page=1'
+gh api --paginate --slurp \
+  'repos/apache/superset/issues?state=open&labels=%23bug&per_page=100' |
+  jq --arg asof '2026-09-09T13:31:00Z' \
+  '[add[] | select(has("pull_request") | not) |
+    (($asof | fromdateiso8601) - (.created_at | fromdateiso8601)) / 86400] |
+   sort | if length % 2 == 1 then .[length / 2 | floor]
+   else (.[length / 2 - 1] + .[length / 2]) / 2 end'
 ```
 
-All three specifications pass 9 of 9 showcase validation checks with zero
-errors or warnings. Automated browser evidence passes containment, readability,
-viewer chrome, and screenshot capture at every Archify desktop viewport.
+An accepted issue still costs a maintainer six handoffs before a reviewable PR:
+classify the report, close information gaps, define acceptance, find the code,
+implement and explain the change, then monitor CI and report the outcome.
 
-## Goals
+The FDE proposal turns suitable issues into useful engineering capacity through
+one bounded path inside GitHub. Maintainers authorize work, receive a scoped PR
+with deterministic evidence, and keep review and merge authority.
 
-1. **Reduce issue-to-review effort.** Automate repetitive triage, investigation,
-   implementation, and status work for suitable issues.
-2. **Preserve human ownership.** Keep authorization, review, merge, and policy
-   decisions with maintainers.
-3. **Make outcomes trustworthy.** Require deterministic acceptance criteria and
-   independent repository checks.
-4. **Fit the existing workflow.** Use GitHub issues, pull requests, labels,
-   comments, and CI rather than introducing a separate interface.
-5. **Create an evidence-based expansion path.** Measure value and failure modes
-   before increasing scope or permissions.
+The reviewed implementation in [#47](https://github.com/ong6/superset/pull/47)
+adds a living status report. It reconstructs available terminal controller
+comments from GitHub, reads the current PR state, and optionally reconciles
+tagged Devin sessions
+([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L962-L1003)).
+It reports CI/policy-ready-for-review, merged, and verified-and-merged as
+separate measures
+([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L1247-L1297)).
 
-## Current boundary
+## HOW
 
-The delivered pilot is intentionally limited to one repository and narrowly
-scoped issues. It does not merge changes, bypass branch protection, repair every
-public issue, or provide a multi-repository control plane.
+```text
+reproduced issue
+  -> readiness brief proposes paths, acceptance command, and CI check
+  -> maintainer authorizes a fix
+  -> controller validates, claims, and pins the request
+  -> Devin API creates one bounded session
+  -> session investigates and opens one scoped pull request
+  -> controller verifies the PR head, policy, linkage, and named CI
+  -> GitHub records "Ready for review"
+  -> living report tracks later merge status separately
+```
 
-The current GitHub Actions job and controller form a working reviewer slice.
-Production hardening would separate patch generation from publication, verify
-changes in a clean sandbox, improve cancellation and recovery, and introduce a
-durable queue or service only when scale requires it.
+### Three architectural decisions
 
-## Recommended pilot
+1. **Claim once before paying for work.** The workflow
+   [serializes each issue](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/.github/workflows/devin-issue-autopilot.yml#L44-L46),
+   derives an idempotency key from the issue, purpose, and request time, checks
+   the terminal marker, and acquires a claim label before session creation.
+   Duplicate deliveries return without starting a second paid session
+   ([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/.github/workflows/devin-issue-autopilot.yml#L256-L292)).
+2. **Treat Devin output as a proposal.** Devin must return structured output.
+   The controller resolves the PR, checks the closing reference, pinned base
+   SHA, allowed paths, and named CI result on the PR head SHA. Passing those
+   checks means ready for maintainer review; it does not mean merged
+   ([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L305-L382)).
+3. **Bound the recovery loop.** Remediation sessions have a
+   [4-ACU API limit](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/adapters.py#L175-L193);
+   the controller sends
+   [one nudge and cancels after 40 minutes](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L246-L272).
 
-Run the workflow on a small set of maintainer-approved issues and compare it
-with the existing process. Capture:
+The report rebuilds a runner-local SQLite cache from GitHub evidence
+([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/store.py#L227-L280)).
+The cache is disposable, and the configured daily gate is not durable
+organization-wide spend enforcement. Reported zero ACUs remain raw API
+telemetry; missing usage is unknown, and neither establishes free work or
+monetary savings
+([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L1327-L1343)).
 
-- time from authorization to reviewable pull request;
-- maintainer effort before and after automation;
-- acceptance and merge rates;
-- CI pass rate and policy rejection reasons;
-- duplicate, timeout, cancellation, and escalation behavior; and
-- ACU usage per accepted outcome.
+### Live evidence
 
-Agree on target thresholds, stop conditions, and an owner before the pilot.
-Expand to more issues or repositories only after the evidence supports it.
+Evidence snapshot: **2026-09-09 18:34 UTC**.
 
-## Longer-term direction
+| Issue | Role | API session | PR | Acceptance / CI | Controller | Merge | Raw ACUs | Elapsed |
+|---|---|---|---|---|---|---|---:|---:|
+| [#13](https://github.com/ong6/superset/issues/13) | README smoke | [session](https://app.devin.ai/sessions/4ece9ef53c7d4d5bbcba6613daa166dd) | [#14](https://github.com/ong6/superset/pull/14) | Doctest and CI passed | Ready for review (`verified`) | Merged | 0.00 reported | 553s |
+| [#48](https://github.com/ong6/superset/issues/48) | Real report limits defect | Pending | Pending | Contract declared; pending execution | Pending | Pending | Unknown | Pending |
+| [#49](https://github.com/ong6/superset/issues/49) | Real SQL Lab limit defect | Pending | Pending | Contract declared; pending execution | Pending | Pending | Unknown | Pending |
 
-The same controlled remediation platform can later support failed-CI repair,
-dependency maintenance, migration issues, release work, or other deterministic
-engineering tasks. Those are expansion options, not claims about the current
-implementation.
+[#13/#14](https://github.com/ong6/superset/issues/13) proves the API-to-PR
+wiring with a README doctest. It is smoke evidence, not substantive Superset
+repair capacity. Issues #48 and #49 are reproduced shortcomings with bounded
+contracts; no session, generated PR, executed acceptance check, or terminal
+controller outcome was available at the snapshot.
+
+## WHY
+
+A script can route labels and run known commands. The engineering work is
+turning observed behavior into a safe remediation contract, tracing the cause,
+making the smallest change, and explaining uncertainty.
+
+The adversarial examples show the boundary. [#34](https://github.com/ong6/superset/issues/34)
+was refused when triage could not produce a complete contract.
+[#35](https://github.com/ong6/superset/issues/35) asked for the missing
+dashboard, environment, expected behavior, reproduction, and evidence.
+[#36](https://github.com/ong6/superset/issues/36) was refused because its
+proposed CI check was outside policy.
+
+The two real pilot issues require repository semantics. [#48](https://github.com/ong6/superset/issues/48)
+connects non-finite configuration values to later Celery timeout construction
+and reserve arithmetic. [#49](https://github.com/ong6/superset/issues/49)
+traces negative and fractional `queryLimit` values through two schemas, a
+maximum-limit sentinel, and raw request reuse.
+
+Both have narrow paths and deterministic acceptance commands. That makes them a
+credible bounded pilot: the defects are real, the proof is fast, and every
+controller rejection remains inspectable. Their business impact is stated in
+the issues; saved maintainer time remains a hypothesis until the pilot measures
+it.
+
+## WHEN
+
+### Pilot ask
+
+Authorize **10 maintainer-approved real issues over 30 days** in this repository.
+The Superset maintainer owns issue selection, review, and merge; the FDE owns
+workflow operation, evidence quality, and weekly failure review. Record a
+comparable manual baseline before counting capacity gains.
+
+Measure:
+
+- authorization-to-reviewable-PR time;
+- maintainer minutes spent per issue;
+- CI/policy-ready-for-review, merged, and verified-and-merged rates;
+- acceptance failures and policy rejection reasons;
+- duplicate, timeout, cancellation, stale-SHA, and escalation behavior; and
+- raw ACUs only for runs with complete telemetry.
+
+Pause on any unauthorized path, duplicate paid session, secret exposure, or two
+consecutive unusable PRs. Expand only after the cohort meets customer-agreed
+quality, capacity, cost, and security gates. Reduced maintainer effort and
+higher useful throughput are value hypotheses until those measurements exist.
+
+After the pilot, native Devin Automations can be an optional event trigger.
+Further customer delivery can add repository security profiles, per-team ACU
+caps and escalation owners, complete metrics-API reporting, sandboxed
+verification, and a queue only when measured volume requires it.
