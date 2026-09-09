@@ -108,6 +108,8 @@ def report(
             GitHubClient(settings),
             Store(settings.db_path),
             devin_client,
+            repository=settings.github_repo,
+            revision=os.getenv("AUTOPILOT_REPORT_REVISION", os.getenv("GITHUB_SHA", "unknown")),
         ),
         nl=False,
     )

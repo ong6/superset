@@ -25,7 +25,17 @@ import pytest
 
 from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
 from autopilot.engine import Engine, rebuild_report, write_report
-from autopilot.models import Issue, ReportRun, ReportSession, Run, SessionCreate, Settings
+from autopilot.models import (
+    Issue,
+    ReportComment,
+    ReportIssue,
+    ReportPullRequest,
+    ReportRun,
+    ReportSession,
+    Run,
+    SessionCreate,
+    Settings,
+)
 from autopilot.store import Store
 
 
@@ -1112,9 +1122,21 @@ def test_report_rebuilds_from_fake_github_without_network(
     github = FakeGitHub.load_report(Path("fixtures/report.json"))
     store = Store(tmp_path / "autopilot.db")
     report_path = tmp_path / "summary.md"
+    assert store.cached_report_runs() == []
 
-    markdown = rebuild_report(github, store, path=report_path)
+    markdown = rebuild_report(
+        github,
+        store,
+        path=report_path,
+        revision="397f034e4f09f238c4ff45acaa60cbc2239d7ad8",
+    )
 
+    assert "- Repository: [ong6/superset](https://github.com/ong6/superset)" in markdown
+    assert "- Revision: `397f034e4f09f238c4ff45acaa60cbc2239d7ad8`" in markdown
+    assert (
+        "- GitHub source: 3 Devin-labeled issues scanned; "
+        "3 trusted `github-actions[bot]` terminal runs reconstructed"
+    ) in markdown
     assert "- Triaged: 1/3 runs" in markdown
     assert "- Fix attempted: 2/3 runs" in markdown
     assert "- Simulated: 0/3 runs" in markdown
@@ -1144,6 +1166,103 @@ def test_report_rebuilds_from_fake_github_without_network(
     cached = store.cached_report_runs()
     assert len(cached) == 3
     assert [run.acus for run in cached] == [3.5, 0.0, None]
+
+
+def test_report_keeps_backlog_and_untrusted_legacy_evidence_out_of_metrics(
+    tmp_path: Path,
+) -> None:
+    fixture = FakeGitHub.load_report(Path("fixtures/report.json"))
+    assert fixture.report_fixture is not None
+    fixture.report_fixture.extend(
+        [
+            ReportIssue(
+                number=13,
+                url="https://github.com/ong6/superset/issues/13",
+                state="closed",
+                labels=["devin-verified"],
+                comments=[
+                    ReportComment(
+                        author="ong6",
+                        url="https://github.com/ong6/superset/issues/13#issuecomment-1",
+                        body=(
+                            "<!-- devin-issue-autopilot:13 -->\n"
+                            "Outcome: verified\n"
+                            "Session: https://app.devin.ai/sessions/legacy"
+                        ),
+                    )
+                ],
+            ),
+            ReportIssue(
+                number=48,
+                url="https://github.com/ong6/superset/issues/48",
+                state="open",
+                labels=["devin-candidate", "devin-exclude"],
+                comments=[],
+            ),
+            ReportIssue(
+                number=49,
+                url="https://github.com/ong6/superset/issues/49",
+                state="open",
+                labels=["devin-fix"],
+                comments=[],
+            ),
+            ReportIssue(
+                number=50,
+                url="https://github.com/ong6/superset/issues/50",
+                state="open",
+                labels=["devin-candidate"],
+                comments=[],
+            ),
+        ]
+    )
+
+    class ReadOnlyGitHub:
+        """Expose only the GitHub reads available to report mode."""
+
+        def report_issues(self) -> list[ReportIssue]:
+            """Return fixture-backed issues."""
+
+            assert fixture.report_fixture is not None
+            return fixture.report_fixture
+
+        def report_pr(self, url: str) -> ReportPullRequest:
+            """Return fixture-backed pull request state."""
+
+            return fixture.report_pr(url)
+
+    class ReadOnlyDevin:
+        """Expose only session listing, never session creation."""
+
+        def list_report_sessions(self) -> list[ReportSession]:
+            """Return no optional reconciliation rows."""
+
+            return []
+
+    store = Store(tmp_path / "empty-cache.db")
+    assert store.cached_report_runs() == []
+
+    markdown = rebuild_report(
+        ReadOnlyGitHub(),
+        store,
+        ReadOnlyDevin(),
+        tmp_path / "summary.md",
+        revision="test-revision",
+    )
+
+    assert "- GitHub source: 7 Devin-labeled issues scanned;" in markdown
+    assert "- Legacy/unsupported evidence excluded: 1 comments" in markdown
+    assert "- Fix attempted: 2/3 runs" in markdown
+    assert "- CI/policy verified: 1/2 fix attempts" in markdown
+    assert "| [#48](https://github.com/ong6/superset/issues/48) | excluded |" in markdown
+    assert "| [#49](https://github.com/ong6/superset/issues/49) | active |" in markdown
+    assert "| [#50](https://github.com/ong6/superset/issues/50) | not started |" in markdown
+    assert (
+        "| [#13](https://github.com/ong6/superset/issues/13) | "
+        "[comment](https://github.com/ong6/superset/issues/13#issuecomment-1) | "
+        "`ong6` | untrusted author |"
+    ) in markdown
+    assert "https://app.devin.ai/sessions/legacy" not in markdown
+    assert len(store.cached_report_runs()) == 3
 
 
 def test_transition_logs_form_a_grep_friendly_timeline(
