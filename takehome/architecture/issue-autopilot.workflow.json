@@ -1,0 +1,307 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Issue to Verified Pull Request",
+    "locale": "en",
+    "output": "issue-autopilot-workflow.html",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "triage",
+        "label": "Triage and approval",
+        "focus": ["issue", "dispatch", "triage_session", "claim"],
+        "note": "A read-only session turns a raw issue into a proposed bounded contract for maintainers."
+      },
+      {
+        "id": "repair",
+        "label": "Bounded repair",
+        "focus": ["claim", "fix_session"],
+        "note": "Authorization, idempotency, and a pinned target SHA precede the secretless remediation session."
+      },
+      {
+        "id": "proof",
+        "label": "Independent proof",
+        "focus": ["fix_session", "verify", "outcome"],
+        "note": "Observed pull-request facts and the named GitHub check—not the session's claim—decide success."
+      },
+      {
+        "id": "stops",
+        "label": "Fail-closed exits",
+        "focus": ["excluded", "blocked", "failed"],
+        "note": "Excluded, duplicate, blocked, stale, policy-rejected, and CI-failed work terminates visibly."
+      }
+    ],
+    "viewBox": [1200, 860]
+  },
+  "lanes": [
+    {
+      "id": "github",
+      "label": "GitHub + Maintainer"
+    },
+    {
+      "id": "controller",
+      "label": "Autopilot Controller"
+    },
+    {
+      "id": "devin",
+      "label": "Bounded Devin Sessions"
+    },
+    {
+      "id": "evidence",
+      "label": "Stops + Evidence",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intake",
+      "label": "Intake + triage",
+      "fromCol": 0,
+      "toCol": 2
+    },
+    {
+      "id": "authorize",
+      "label": "Authorize + claim",
+      "fromCol": 3,
+      "toCol": 3,
+      "variant": "security"
+    },
+    {
+      "id": "remediate",
+      "label": "Repair + prove",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "groups": [
+    {
+      "id": "session_boundary",
+      "label": "No repository secrets",
+      "lane": "devin",
+      "fromCol": 2,
+      "toCol": 4,
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "issue",
+    "dispatch",
+    "triage_session",
+    "claim",
+    "fix_session",
+    "verify",
+    "outcome"
+  ],
+  "semanticChecks": {
+    "allowedRoots": ["issue"],
+    "allowedTerminals": ["outcome", "excluded", "blocked", "failed"],
+    "requiredPaths": [
+      {
+        "from": "issue",
+        "to": "outcome"
+      },
+      {
+        "from": "claim",
+        "to": "verify"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "issue",
+      "lane": "github",
+      "col": 0,
+      "type": "external",
+      "label": "Issue Event",
+      "sublabel": "open / reopen",
+      "brand": "github",
+      "width": 132
+    },
+    {
+      "id": "outcome",
+      "lane": "github",
+      "col": 5,
+      "type": "external",
+      "label": "Issue Status",
+      "sublabel": "comment + labels",
+      "brand": "github",
+      "width": 142
+    },
+    {
+      "id": "dispatch",
+      "lane": "controller",
+      "col": 1,
+      "type": "cloud",
+      "label": "Dispatch",
+      "sublabel": "event + permissions",
+      "brand": "github-actions",
+      "width": 132
+    },
+    {
+      "id": "claim",
+      "lane": "controller",
+      "col": 3,
+      "type": "security",
+      "label": "Authorize + Claim",
+      "sublabel": "contract · pinned SHA",
+      "tag": "idempotent",
+      "width": 136,
+      "yOffset": 18
+    },
+    {
+      "id": "verify",
+      "lane": "controller",
+      "col": 5,
+      "type": "security",
+      "label": "Independent Verify",
+      "sublabel": "PR facts + named CI",
+      "tag": "fail closed",
+      "width": 142,
+      "yOffset": 18
+    },
+    {
+      "id": "triage_session",
+      "lane": "devin",
+      "col": 2,
+      "type": "backend",
+      "label": "Read-only Triage",
+      "sublabel": "structured output · 1 ACU",
+      "tag": "no PR",
+      "width": 142
+    },
+    {
+      "id": "fix_session",
+      "lane": "devin",
+      "col": 4,
+      "type": "backend",
+      "label": "Scoped Remediation",
+      "sublabel": "structured output · one PR",
+      "tag": "no secrets",
+      "width": 148
+    },
+    {
+      "id": "excluded",
+      "lane": "evidence",
+      "col": 1,
+      "type": "external",
+      "label": "Excluded",
+      "sublabel": "devin-exclude",
+      "width": 124
+    },
+    {
+      "id": "blocked",
+      "lane": "evidence",
+      "col": 4,
+      "type": "security",
+      "label": "Blocked / Timeout",
+      "sublabel": "approval · input · limit",
+      "width": 142
+    },
+    {
+      "id": "failed",
+      "lane": "evidence",
+      "col": 5,
+      "type": "security",
+      "label": "Policy / CI Stop",
+      "sublabel": "stale · invalid · failed",
+      "width": 142
+    }
+  ],
+  "edges": [
+    {
+      "id": "issue-dispatch",
+      "from": "issue",
+      "to": "dispatch",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "dispatch-triage",
+      "from": "dispatch",
+      "to": "triage_session",
+      "variant": "default",
+      "role": "main"
+    },
+    {
+      "id": "triage-claim",
+      "from": "triage_session",
+      "to": "claim",
+      "variant": "security",
+      "role": "main"
+    },
+    {
+      "id": "claim-fix",
+      "from": "claim",
+      "to": "fix_session",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "fix-verify",
+      "from": "fix_session",
+      "to": "verify",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "verify-outcome",
+      "from": "verify",
+      "to": "outcome",
+      "variant": "emphasis",
+      "role": "return"
+    },
+    {
+      "id": "dispatch-excluded",
+      "from": "dispatch",
+      "to": "excluded",
+      "label": "excluded",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "fix-blocked",
+      "from": "fix_session",
+      "to": "blocked",
+      "label": "blocked",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "verify-failed",
+      "from": "verify",
+      "to": "failed",
+      "label": "not verified",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One crisp demo story",
+      "items": [
+        "A raw issue becomes a maintainer-approved contract, one bounded repair session, and one pull request.",
+        "The final issue update links the session, pull request, CI result, elapsed time, ACUs, and outcome."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Safety before autonomy",
+      "items": [
+        "Write scope requires maintainer authorization, allowed paths, a named check, and a pinned default-branch SHA.",
+        "The controller retains credentials and suppresses duplicates before invoking remediation."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Proof outside the session",
+      "items": [
+        "Structured output is cross-checked against the observed pull request.",
+        "Policy, stale-SHA, blocked, timeout, and CI failures remain visible terminal outcomes."
+      ]
+    }
+  ]
+}

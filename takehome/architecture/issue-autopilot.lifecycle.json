@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Remediation Run Lifecycle",
+    "locale": "en",
+    "output": "issue-autopilot-lifecycle.html",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "Verified run",
+        "focus": ["new", "creating", "session_running", "verifying", "verified"],
+        "note": "The persisted main path advances from an idempotent claim to independent pull-request verification."
+      },
+      {
+        "id": "session-controls",
+        "label": "Bounded session controls",
+        "focus": ["session_running", "cancelling", "terminal_stop"],
+        "note": "The controller sends at most one nudge, blocks on approval, and cancels work at the wall-clock limit."
+      },
+      {
+        "id": "policy-exits",
+        "label": "Policy and proof exits",
+        "focus": ["creating", "verifying", "policy_rejected", "terminal_stop"],
+        "note": "Invalid contracts, mismatched structured output, missing pull requests, stale targets, and failed CI do not pass."
+      }
+    ],
+    "viewBox": [1060, 760]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Persisted main states"
+    },
+    {
+      "id": "controls",
+      "label": "Session controls"
+    },
+    {
+      "id": "terminal",
+      "label": "Terminal outcomes"
+    }
+  ],
+  "states": [
+    {
+      "id": "new",
+      "type": "start",
+      "label": "New",
+      "sublabel": "unique run key claimed",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "idempotent",
+      "width": 104,
+      "height": 68
+    },
+    {
+      "id": "creating",
+      "type": "active",
+      "label": "Creating",
+      "sublabel": "contract + actor + SHA",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "preflight",
+      "width": 110,
+      "height": 68
+    },
+    {
+      "id": "session_running",
+      "type": "active",
+      "label": "Session Running",
+      "sublabel": "bounded Devin API v3",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "polling",
+      "width": 110,
+      "height": 68
+    },
+    {
+      "id": "verifying",
+      "type": "decision",
+      "label": "Verifying",
+      "sublabel": "PR facts + named CI",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "independent",
+      "width": 110,
+      "height": 68
+    },
+    {
+      "id": "verified",
+      "type": "success",
+      "label": "Verified",
+      "sublabel": "issue status updated",
+      "lane": "main",
+      "col": 4,
+      "step": "05",
+      "tag": "terminal",
+      "width": 104,
+      "height": 68
+    },
+    {
+      "id": "cancelling",
+      "type": "active",
+      "label": "Cancelling",
+      "sublabel": "delete session",
+      "lane": "controls",
+      "col": 0,
+      "tag": "2,400 seconds",
+      "width": 112,
+      "height": 64
+    },
+    {
+      "id": "policy_rejected",
+      "type": "failure",
+      "label": "Policy Rejected",
+      "sublabel": "contract or output",
+      "lane": "terminal",
+      "col": 0,
+      "tag": "terminal",
+      "width": 118,
+      "height": 64
+    },
+    {
+      "id": "terminal_stop",
+      "type": "failure",
+      "label": "Stopped",
+      "sublabel": "timeout · stale · CI",
+      "lane": "terminal",
+      "col": 1,
+      "tag": "terminal",
+      "width": 124,
+      "height": 64
+    }
+  ],
+  "transitions": [
+    {
+      "id": "new-creating",
+      "from": "new",
+      "to": "creating",
+      "variant": "emphasis"
+    },
+    {
+      "id": "creating-session",
+      "from": "creating",
+      "to": "session_running",
+      "variant": "emphasis"
+    },
+    {
+      "id": "session-verifying",
+      "from": "session_running",
+      "to": "verifying",
+      "variant": "emphasis"
+    },
+    {
+      "id": "verifying-verified",
+      "from": "verifying",
+      "to": "verified",
+      "variant": "emphasis"
+    },
+    {
+      "id": "session-cancelling",
+      "from": "session_running",
+      "to": "cancelling",
+      "variant": "security"
+    },
+    {
+      "id": "cancelling-timeout",
+      "from": "cancelling",
+      "to": "terminal_stop",
+      "variant": "security"
+    },
+    {
+      "id": "creating-policy",
+      "from": "creating",
+      "to": "policy_rejected",
+      "variant": "security",
+      "route": "drop"
+    },
+    {
+      "id": "verifying-failed",
+      "from": "verifying",
+      "to": "terminal_stop",
+      "variant": "security",
+      "route": "drop"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Durable state machine",
+      "items": [
+        "SQLite stores one unique run key and append-only transitions.",
+        "A restart resumes from persisted state instead of creating a second session."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Bounded intervention",
+      "items": [
+        "Waiting for user input gets at most one nudge.",
+        "Waiting for approval blocks; the wall-clock limit triggers session deletion and cancellation."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Explicit terminal outcomes",
+      "items": [
+        "Success is only the verified state.",
+        "No change, no PR, blocked, timed out, policy rejected, Devin error, stale SHA, and CI failure stay distinguishable in reports."
+      ]
+    }
+  ]
+}
