@@ -777,9 +777,10 @@ class Engine:
             ("Session", run.session_url or "not started"),
             ("Pull request", run.pr_url or "none"),
             ("Target", self._target(run)),
-            ("Verification", self._verification(run)),
+            ("Verification", self._terminal_verification(run)),
             ("Outcome", f"**{outcome}**"),
             ("Reason", self._github_text(note) or self._default_reason(outcome)),
+            ("Next action", self._next_action(outcome)),
             ("ACUs", f"{run.acus:.2f}"),
             ("Elapsed", f"{int(self.clock() - run.created)}s"),
             ("Run key", f"`{run.key}`"),
@@ -823,6 +824,10 @@ class Engine:
         return run.ci or "pending"
 
     @staticmethod
+    def _terminal_verification(run: Run) -> str:
+        return run.ci or "not_run"
+
+    @staticmethod
     def _terminal_status(outcome: str) -> str:
         return "Ready for review" if outcome == "verified" else "Stopped"
 
@@ -839,6 +844,33 @@ class Engine:
             "stale_sha": "The target branch changed before verification completed.",
             "devin_error": "The Devin session or controller returned an error.",
         }.get(outcome, "The run stopped.")
+
+    @staticmethod
+    def _next_action(outcome: str) -> str:
+        return {
+            "verified": "Review the linked pull request; merge only after maintainer approval.",
+            "ci_failed": (
+                "Review the failed check on the linked pull request, then apply "
+                "`devin-retry` after it is fixed."
+            ),
+            "policy_rejected": (
+                "Update the issue or remediation contract to address the reason, then apply "
+                "`devin-triage` before approving another run."
+            ),
+            "no_pr": "Review the session result, then apply `devin-retry` if a fix is needed.",
+            "blocked": (
+                "Provide the required input or narrow the contract, then apply `devin-retry`."
+            ),
+            "no_change": "Close the issue if resolved, or update its reproduction and retriage.",
+            "timed_out": "Review the session, then apply `devin-retry` if another run is safe.",
+            "stale_sha": (
+                "Apply `devin-triage` to refresh against the latest target, then approve a "
+                "new remediation run."
+            ),
+            "devin_error": (
+                "Review the controller error, then apply `devin-retry` when it is resolved."
+            ),
+        }.get(outcome, "Review the outcome before starting another run.")
 
     @staticmethod
     def _triage_status(output: TriageResult) -> str:

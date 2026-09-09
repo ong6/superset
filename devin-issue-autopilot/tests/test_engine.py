@@ -537,7 +537,7 @@ def test_branch_movement_rejects_stale_proposal(tmp_path: Path) -> None:
 
 
 def test_forbidden_contract_path_never_starts_session(tmp_path: Path) -> None:
-    engine, devin, _, item = setup_engine(
+    engine, devin, github, item = setup_engine(
         tmp_path,
         [exit_snapshot("https://github.com/ong6/superset/pull/10")],
     )
@@ -550,6 +550,10 @@ def test_forbidden_contract_path_never_starts_session(tmp_path: Path) -> None:
 
     assert run.state == "policy_rejected"
     assert devin.create_calls == 0
+    comment = str(github.comments[0]["body"])
+    assert "| Verification | not_run |" in comment
+    assert "| Next action |" in comment
+    assert "`devin-triage`" in comment
 
 
 def test_unapproved_check_never_starts_session(tmp_path: Path) -> None:
