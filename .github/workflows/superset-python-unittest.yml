@@ -63,6 +63,13 @@ jobs:
         uses: ./.github/actions/setup-backend/
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Remediation acceptance checks
+        env:
+          SUPERSET_TESTENV: true
+          SUPERSET_SECRET_KEY: not-a-secret
+        run: |
+          pytest -q 'tests/unit_tests/utils/test_report_execution.py::test_report_execution_config_rejects_invalid_startup_values[overrides2-must total less]'
+          pytest -q tests/unit_tests/migrations/test_add_deleted_at_to_tables.py
       - name: Python unit tests
         env:
           SUPERSET_TESTENV: true
