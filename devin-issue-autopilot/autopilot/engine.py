@@ -801,10 +801,11 @@ class Engine:
 
     @staticmethod
     def _comment(title: str, rows: list[tuple[str, str]], body: str) -> str:
-        table = "\n".join(
-            f"| {field} | {value.replace('|', '\\|').replace(chr(10), '<br>')} |"
-            for field, value in rows
-        )
+        table_rows: list[str] = []
+        for field, value in rows:
+            value = value.replace("|", "\\|").replace("\n", "<br>")
+            table_rows.append(f"| {field} | {value} |")
+        table = "\n".join(table_rows)
         return f"## {title}\n\n| Field | Value |\n|---|---|\n{table}\n\n{body}".strip()
 
     @staticmethod
