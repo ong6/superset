@@ -43,8 +43,8 @@ under the License.
 7. If the report is missing reproduction details, choose `needs_info`.
 8. If the report is actionable but should not be fixed automatically, choose
    `needs_maintainer`.
-9. If no safe scope and acceptance command can be proposed, return empty
-   `allowed_paths` and `acceptance_command`.
+9. For `needs_info` or `needs_maintainer`, return empty `allowed_paths`,
+   `acceptance_command`, and `ci_check`.
 10. Return only the requested structured output with a concise summary, next
     action, confidence, labels from the allowed label list, `allowed_paths`,
     `acceptance_command`, and `ci_check`.
