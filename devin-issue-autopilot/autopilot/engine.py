@@ -138,9 +138,9 @@ class Engine:
             "Use @skills:superset-issue-triage. Inspect the repository only to propose "
             "the narrowest production paths, one safe one-line acceptance command, and "
             "the exact CI check a maintainer would approve. If no safe contract can be "
-            "proposed, return empty allowed_paths and acceptance_command with needs_info "
-            "or needs_maintainer. Return only the required structured output. Choose one "
-            "category, a short "
+            "proposed, return empty allowed_paths, acceptance_command, and ci_check with "
+            "needs_info or needs_maintainer. Return only the required structured output. "
+            "Choose one category, a short "
             "maintainer-facing summary, missing information, risk notes, and the next "
             "action. Labels must be selected "
             f"only from this allowlist: {labels}. Security-looking reports must be "
@@ -480,9 +480,10 @@ class Engine:
             return self._finish_triage(run, "triage_failed")
         if status != "exit":
             return self._finish_triage(run, "triage_failed", note=f"unknown status {status}")
-        output = snapshot.structured_output
-        if not isinstance(output, TriageResult):
+        snapshot_output = snapshot.structured_output
+        if not isinstance(snapshot_output, TriageResult):
             return self._finish_triage(run, "triage_failed", note="missing triage output")
+        output = snapshot_output
         if snapshot.pull_requests:
             return self._finish_triage(run, "policy_rejected", note="triage opened a PR")
         unknown_labels = sorted(set(output.labels) - set(self.settings.triage_labels))
@@ -491,6 +492,14 @@ class Engine:
                 run,
                 "policy_rejected",
                 note=f"unknown triage labels: {', '.join(unknown_labels)}",
+            )
+        if output.outcome != "triaged" or output.category == "security":
+            output = output.model_copy(
+                update={
+                    "allowed_paths": [],
+                    "acceptance_command": "",
+                    "ci_check": "",
+                }
             )
         if (contract_error := self._triage_contract_error(output)) is not None:
             return self._finish_triage(run, "policy_rejected", note=contract_error)

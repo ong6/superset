@@ -337,6 +337,60 @@ def test_triage_can_request_information_without_a_contract(tmp_path: Path) -> No
     assert "<!-- devin-triage-contract:" not in str(github.comments[0]["body"])
 
 
+@pytest.mark.parametrize(
+    ("outcome", "category", "expected_label"),
+    [
+        ("needs_info", "bug", "devin-needs-info"),
+        ("needs_maintainer", "other", "devin-needs-maintainer"),
+    ],
+)
+def test_nonactionable_triage_discards_proposed_contract_fields(
+    tmp_path: Path,
+    outcome: str,
+    category: str,
+    expected_label: str,
+) -> None:
+    item = issue().model_copy(update={"label_at": "triage:2026-09-08T12:00:00Z"})
+    snapshot = triage_snapshot()
+    output = snapshot["structured_output"]
+    assert isinstance(output, dict)
+    output.update(
+        outcome=outcome,
+        category=category,
+        summary="The report is not ready for automatic remediation.",
+        allowed_paths=[],
+        acceptance_command="pytest -q irrelevant",
+        ci_check="Python-Unit",
+    )
+    devin = FakeDevin({item.number: [snapshot]})
+    github = FakeGitHub([item], {})
+    settings = Settings("", "", "", db_path=tmp_path / "autopilot.db")
+    engine = Engine(
+        settings,
+        Store(settings.db_path),
+        FakeDevin(),
+        github,
+        Clock(),
+        triage_devin=devin,
+    )
+
+    run = engine.run_triage_issue(item, sleep=lambda _: None)
+
+    assert run.state == "triaged"
+    labels = github.comments[0]["labels"]
+    assert isinstance(labels, list)
+    assert expected_label in labels
+    body = str(github.comments[0]["body"])
+    assert "The report is not ready for automatic remediation." in body
+    assert "Acceptance command: Not proposed" in body
+    assert "CI check: Not proposed" in body
+    assert "<!-- devin-triage-contract:" not in body
+    persisted = json.loads(run.structured_output)
+    assert persisted["allowed_paths"] == []
+    assert persisted["acceptance_command"] == ""
+    assert persisted["ci_check"] == ""
+
+
 def test_actionable_triage_requires_a_complete_contract(tmp_path: Path) -> None:
     item = issue().model_copy(update={"label_at": "triage:2026-09-08T12:00:00Z"})
     snapshot = triage_snapshot()
