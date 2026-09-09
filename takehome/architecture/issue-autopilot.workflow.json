@@ -50,7 +50,7 @@
     },
     {
       "id": "evidence",
-      "label": "Outcomes",
+      "label": "Exit",
       "variant": "exception"
     }
   ],
@@ -70,7 +70,7 @@
     },
     {
       "id": "remediate",
-      "label": "Repair + proof",
+      "label": "Proof",
       "fromCol": 4,
       "toCol": 5,
       "variant": "emphasis"
@@ -142,7 +142,7 @@
       "lane": "controller",
       "col": 3,
       "type": "security",
-      "label": "Authorize Claim",
+      "label": "Claim",
       "width": 136,
       "yOffset": 18
     },
@@ -151,7 +151,7 @@
       "lane": "controller",
       "col": 5,
       "type": "security",
-      "label": "Independent Verify",
+      "label": "Verify",
       "width": 142,
       "yOffset": 18
     },
@@ -160,7 +160,7 @@
       "lane": "devin",
       "col": 2,
       "type": "backend",
-      "label": "Read-only Triage",
+      "label": "Triage",
       "width": 142
     },
     {
@@ -168,7 +168,7 @@
       "lane": "devin",
       "col": 4,
       "type": "backend",
-      "label": "Scoped Remediation",
+      "label": "Repair",
       "width": 148
     },
     {
@@ -184,7 +184,7 @@
       "lane": "evidence",
       "col": 4,
       "type": "security",
-      "label": "Blocked / Timeout",
+      "label": "Blocked",
       "width": 142
     },
     {
@@ -192,7 +192,7 @@
       "lane": "evidence",
       "col": 5,
       "type": "security",
-      "label": "Policy / CI Stop",
+      "label": "Stop",
       "width": 142
     }
   ],
