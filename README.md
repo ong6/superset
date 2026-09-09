@@ -17,9 +17,10 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-## Take-home: GitHub Issue Remediation Pilot
+## Take-home
 
-[Overview](takehome/README.md) · [Autopilot](devin-issue-autopilot/README.md) · [Actions workflow](https://github.com/ong6/superset/actions/workflows/devin-issue-autopilot.yml)
+- [GitHub Issue Remediation Pilot](takehome/README.md)
+- [Devin Issue Autopilot](devin-issue-autopilot/README.md)
 
 # Superset
 
