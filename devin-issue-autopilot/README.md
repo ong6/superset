@@ -184,13 +184,16 @@ historical source of truth.
 The terminal and `reports/summary.md` contain the same per-run table and
 denominated totals. Rows link their issue, session, and pull request; distinguish
 triage, remediation, setup/build roles, and simulation; and separate PR-opened,
-CI-verified, merged, and verified-merged outcomes. Every available terminal
-comment is retained, including failed attempts. Lifecycle comments updated in
-place by GitHub can expose only their latest durable body.
+controller CI/policy-verified (ready for review), merged, and
+verified-and-merged outcomes. Every available terminal comment is retained,
+including failed attempts. Lifecycle comments updated in place by GitHub can
+expose only their latest durable body.
 
 Raw ACU telemetry preserves reported zero separately from missing data. It does
 not establish billing, monetary cost, savings, or free remediation, so the
-report suppresses per-success ratios when telemetry is incomplete. The
+report suppresses per-success ratios when telemetry is incomplete. Live repair
+efficiency uses only nonsimulated remediation rows and the controller-verified
+denominator; triage, setup/build, and simulation telemetry is excluded. The
 `AUTOPILOT_DAILY_ACU_CAP` gate sums only reported usage in the current local
 SQLite cache; missing telemetry is not counted, and workflow runners use an
 ephemeral database, so it is not a durable cross-run or organization billing
@@ -201,7 +204,8 @@ limit. Each remediation session is still created with a 4-ACU limit and a
 Workflow logs emit `transition issue=... run_id=... from=... to=...
 elapsed=...`, so `gh run view --log | grep transition` shows each run's state
 timeline. Manual report dispatches publish the Markdown to the workflow summary;
-the daily schedule commits a changed summary to `master`.
+the daily schedule publishes the same summary and a downloadable 30-day
+artifact without changing the repository.
 
 ## Scope
 

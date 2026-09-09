@@ -24,8 +24,8 @@ import httpx
 import pytest
 
 from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
-from autopilot.engine import Engine, rebuild_report
-from autopilot.models import Issue, ReportSession, Run, SessionCreate, Settings
+from autopilot.engine import Engine, rebuild_report, write_report
+from autopilot.models import Issue, ReportRun, ReportSession, Run, SessionCreate, Settings
 from autopilot.store import Store
 
 
@@ -1119,16 +1119,20 @@ def test_report_rebuilds_from_fake_github_without_network(
     assert "- Fix attempted: 2/3 runs" in markdown
     assert "- Simulated: 0/3 runs" in markdown
     assert "- PR opened: 2/2 fix attempts" in markdown
-    assert "- CI verified: 1/2 fix attempts" in markdown
+    assert "- CI/policy verified: 1/2 fix attempts" in markdown
     assert "- Merged: 1/2 fix attempts" in markdown
-    assert "- Verified merged: 1/2 fix attempts" in markdown
+    assert "- Verified-and-merged: 1/2 fix attempts" in markdown
+    assert "- Verified-to-merged conversion rate: 1/1 (100.0%)" in markdown
     assert "- ci_failed: 1/2 fix attempts" in markdown
     assert "- policy_rejected: 0/2 fix attempts" in markdown
     assert "- needs-human: 2/3 runs" in markdown
     assert "- Median time to PR: 450s (2/2 PRs timed)" in markdown
     assert "- ACUs total: 3.50 raw across 2/3 runs" in markdown
     assert "- Reported zero ACUs: 1/2 reported runs" in markdown
-    assert "- ACUs per verified PR: n/a" in markdown
+    assert (
+        "- Live repair ACUs per CI/policy-verified PR: "
+        "3.50 raw (2/2 live repairs reported; not billing/cost)"
+    ) in markdown
     assert "- Verified rate: 1/2 (50.0%)" in markdown
     assert "[#101](https://github.com/ong6/superset/issues/101) (closed)" in markdown
     assert "[session](https://app.devin.ai/sessions/verified)" in markdown
@@ -1220,7 +1224,7 @@ def test_report_reconciles_acus_from_devin_sessions(tmp_path: Path) -> None:
     assert "- ACUs total: 5.00 raw across 2/3 runs" in markdown
 
 
-def test_report_requires_merge_for_verified_success(tmp_path: Path) -> None:
+def test_report_keeps_controller_verification_when_pr_is_open(tmp_path: Path) -> None:
     github = FakeGitHub.load_report(Path("fixtures/report.json"))
     github.report_prs["https://github.com/ong6/superset/pull/1001"].state = "open"
 
@@ -1230,7 +1234,76 @@ def test_report_requires_merge_for_verified_success(tmp_path: Path) -> None:
         path=tmp_path / "summary.md",
     )
 
-    assert "- CI verified: 1/2 fix attempts" in markdown
+    assert "- CI/policy verified: 1/2 fix attempts" in markdown
     assert "- Merged: 0/2 fix attempts" in markdown
-    assert "- Verified merged: 0/2 fix attempts" in markdown
-    assert "- Verified rate: 0/2 (0.0%)" in markdown
+    assert "- Verified-and-merged: 0/2 fix attempts" in markdown
+    assert "- Verified-to-merged conversion rate: 0/1 (0.0%)" in markdown
+    assert "- Verified rate: 1/2 (50.0%)" in markdown
+
+
+def test_report_separates_verified_open_and_verified_merged_prs(tmp_path: Path) -> None:
+    runs = [
+        ReportRun(
+            source_id="verified-open",
+            issue=201,
+            issue_url="https://github.com/ong6/superset/issues/201",
+            issue_state="open",
+            kind="fix",
+            session_role="remediation",
+            state="verified",
+            pr_url="https://github.com/ong6/superset/pull/2001",
+            pr_state="open",
+            ci="success",
+            outcome="verified",
+            acus=2,
+        ),
+        ReportRun(
+            source_id="verified-merged",
+            issue=202,
+            issue_url="https://github.com/ong6/superset/issues/202",
+            issue_state="closed",
+            kind="fix",
+            session_role="remediation",
+            state="verified",
+            pr_url="https://github.com/ong6/superset/pull/2002",
+            pr_state="merged",
+            ci="success",
+            outcome="verified",
+            acus=4,
+        ),
+        ReportRun(
+            source_id="simulation",
+            issue=203,
+            issue_url="https://github.com/ong6/superset/issues/203",
+            issue_state="open",
+            kind="fix",
+            source="simulation",
+            session_role="remediation",
+            state="verified",
+            outcome="verified",
+            acus=100,
+        ),
+        ReportRun(
+            source_id="setup",
+            issue=204,
+            issue_url="https://github.com/ong6/superset/issues/204",
+            issue_state="open",
+            kind="fix",
+            session_role="setup",
+            state="completed",
+            outcome="completed",
+            acus=200,
+        ),
+    ]
+
+    markdown = write_report(runs, tmp_path / "summary.md")
+
+    assert "- CI/policy verified: 2/2 fix attempts" in markdown
+    assert "- Merged: 1/2 fix attempts" in markdown
+    assert "- Verified-and-merged: 1/2 fix attempts" in markdown
+    assert "- Verified-to-merged conversion rate: 1/2 (50.0%)" in markdown
+    assert "- Verified rate: 2/2 (100.0%)" in markdown
+    assert (
+        "- Live repair ACUs per CI/policy-verified PR: "
+        "3.00 raw (2/2 live repairs reported; not billing/cost)"
+    ) in markdown

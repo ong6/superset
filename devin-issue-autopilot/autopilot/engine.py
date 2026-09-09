@@ -1251,18 +1251,23 @@ def write_report(
     ]
     fix_attempted = len(fix_runs)
     pr_opened = sum(run.pr_url is not None for run in fix_runs)
-    ci_verified = sum(run.outcome == "verified" for run in fix_runs)
+    controller_verified = sum(run.outcome == "verified" for run in fix_runs)
     merged = sum(run.pr_state == "merged" for run in fix_runs)
-    verified = sum(run.outcome == "verified" and run.pr_state == "merged" for run in fix_runs)
+    verified_and_merged = sum(
+        run.outcome == "verified" and run.pr_state == "merged" for run in fix_runs
+    )
     pr_times = [run.time_to_pr for run in fix_runs if run.time_to_pr is not None]
     reported_acus = [run.acus for run in runs if run.acus is not None]
     acus_total = sum(reported_acus)
     zero_acus = sum(acu == 0 for acu in reported_acus)
-    ratio = (
-        f"{acus_total / verified:.2f} raw "
-        f"({len(reported_acus)}/{run_count} runs reported; not billing/cost)"
-        if verified and len(reported_acus) == run_count
-        else "n/a (complete raw telemetry and a verified merged PR are required)"
+    reported_live_repair_acus = [run.acus for run in fix_runs if run.acus is not None]
+    live_repair_acus_total = sum(reported_live_repair_acus)
+    live_repair_ratio = (
+        f"{live_repair_acus_total / controller_verified:.2f} raw "
+        f"({len(reported_live_repair_acus)}/{fix_attempted} live repairs reported; "
+        "not billing/cost)"
+        if controller_verified and len(reported_live_repair_acus) == fix_attempted
+        else "n/a (complete raw live-repair telemetry and a CI/policy-verified PR are required)"
     )
     totals: list[tuple[str, str | int]] = [
         ("Triaged", f"{sum(run.state == 'triaged' for run in runs)}/{run_count} runs"),
@@ -1273,9 +1278,24 @@ def write_report(
             f"{sum(run.session_role in {'setup', 'build'} for run in runs)}/{run_count} runs",
         ),
         ("PR opened", f"{pr_opened}/{fix_attempted} fix attempts"),
-        ("CI verified", f"{ci_verified}/{fix_attempted} fix attempts"),
+        (
+            "CI/policy verified",
+            f"{controller_verified}/{fix_attempted} fix attempts",
+        ),
         ("Merged", f"{merged}/{fix_attempted} fix attempts"),
-        ("Verified merged", f"{verified}/{fix_attempted} fix attempts"),
+        (
+            "Verified-and-merged",
+            f"{verified_and_merged}/{fix_attempted} fix attempts",
+        ),
+        (
+            "Verified-to-merged conversion rate",
+            (
+                f"{verified_and_merged}/{controller_verified} "
+                f"({verified_and_merged / controller_verified:.1%})"
+                if controller_verified
+                else "n/a (0 CI/policy-verified PRs)"
+            ),
+        ),
         (
             "ci_failed",
             f"{sum(run.outcome == 'ci_failed' for run in fix_runs)}/{fix_attempted} fix attempts",
@@ -1296,10 +1316,10 @@ def write_report(
             f"{acus_total:.2f} raw across {len(reported_acus)}/{run_count} runs",
         ),
         ("Reported zero ACUs", f"{zero_acus}/{len(reported_acus)} reported runs"),
-        ("ACUs per verified PR", ratio),
+        ("Live repair ACUs per CI/policy-verified PR", live_repair_ratio),
         (
             "Verified rate",
-            f"{verified}/{fix_attempted} ({verified / fix_attempted:.1%})"
+            f"{controller_verified}/{fix_attempted} ({controller_verified / fix_attempted:.1%})"
             if fix_attempted
             else "n/a (0 fix attempts)",
         ),
@@ -1319,9 +1339,8 @@ def write_report(
         "caps remain 4/1 ACUs and 2400s/600s for remediation/triage, with one/zero "
         "nudges.\n\n"
         "How to read this: rows preserve every available terminal GitHub Actions "
-        "comment; live fixes count as verified only when CI succeeded and the PR is merged.\n\n"
-        + "\n".join(table)
-        + "\n"
+        "comment; CI/policy verified is the controller's ready-for-review outcome, "
+        "while merged and verified-and-merged are separate measures.\n\n" + "\n".join(table) + "\n"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(markdown)
