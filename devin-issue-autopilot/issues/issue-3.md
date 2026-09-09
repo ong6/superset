@@ -19,36 +19,36 @@ under the License.
 
 # Title
 
-Restore safe downgrade ordering for tables deleted_at
+Repair the dedup doctest continuation formatting
 
 ## Symptom
 
-The tables soft-delete migration removes `deleted_at` before its index during downgrade,
-which fails on databases that require the index to be removed first.
+The multiline `dedup` example omits doctest continuation prompts, so pytest compiles only
+the opening `print(` line and raises a `SyntaxError`.
 
 ## Repro
 
 ```bash
-pytest -q tests/unit_tests/migrations/test_add_deleted_at_to_tables.py
+pytest -q --doctest-modules superset/result_set.py
 ```
 
 ## Expected
 
-Downgrade removes the index before the column and the `unit-tests (current)` check passes.
+Both `dedup` examples execute successfully and the `unit-tests (current)` check passes.
 
 CI check: `unit-tests (current)`
 
 ## Allowed paths
 
-- `superset/migrations/versions/2026-05-08_12-10_3a8e6f2c1b95_add_deleted_at_to_tables.py`
+- `superset/result_set.py`
 
 ## Forbidden
 
-- Tests, CI workflows, requirements, generated files, and all paths not listed above.
-- Skipping migration checks, force-pushing, or merging.
+- Tests, CI workflows, requirements, and all paths not listed above.
+- Removing the example, skipping doctests, force-pushing, or merging.
 
 ## Acceptance command
 
 ```bash
-pytest -q tests/unit_tests/migrations/test_add_deleted_at_to_tables.py
+pytest -q --doctest-modules superset/result_set.py
 ```
