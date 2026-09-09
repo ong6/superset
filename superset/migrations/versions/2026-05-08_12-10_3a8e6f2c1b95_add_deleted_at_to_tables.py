@@ -53,6 +53,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Reverse ``upgrade`` by removing the column and index."""
-    drop_columns(TABLE_NAME, "deleted_at")
+    """Reverse ``upgrade`` by removing the index and then the column."""
     drop_index(TABLE_NAME, INDEX_NAME)
+    drop_columns(TABLE_NAME, "deleted_at")
