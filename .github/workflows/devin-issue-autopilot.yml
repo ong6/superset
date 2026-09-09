@@ -20,20 +20,23 @@ on:
     types: [opened, reopened, labeled]
   issue_comment:
     types: [created]
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
       issue_number:
         description: "Issue number to process"
-        required: true
+        required: false
         type: number
       mode:
-        description: "Run read-only triage or approved remediation"
+        description: "Run triage, approved remediation, or reporting"
         required: true
         default: triage
         type: choice
         options:
           - triage
           - remediate
+          - report
 
 permissions:
   contents: read
@@ -45,7 +48,7 @@ concurrency:
 jobs:
   remediate:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode != 'report') ||
       (github.event_name == 'issues' &&
        (github.event.action == 'opened' ||
         github.event.action == 'reopened' ||
@@ -78,6 +81,11 @@ jobs:
             function skip(message) {
               core.warning(message);
               core.setOutput("claimed", "false");
+            }
+
+            if (!Number.isInteger(issue_number) || issue_number <= 0) {
+              core.setFailed("A positive issue number is required for triage or remediation.");
+              return;
             }
 
             if (context.eventName === "issue_comment") {
@@ -289,19 +297,19 @@ jobs:
             core.setOutput("claim_label", claimLabel);
 
       - name: Checkout repository
-        if: steps.claim.outputs.claimed == 'true'
+        if: always()
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        if: steps.claim.outputs.claimed == 'true'
+        if: always()
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install issue controller
-        if: steps.claim.outputs.claimed == 'true'
+        if: always()
         run: python -m pip install ./devin-issue-autopilot
 
       - name: Run bounded issue automation
@@ -392,3 +400,92 @@ jobs:
               }
               core.setFailed(`Could not verify removal of ${claim}; restoration was attempted.`);
             }
+
+      - name: Publish observability report
+        if: always()
+        env:
+          AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
+          DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
+          DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cd devin-issue-autopilot
+          python -m autopilot report --devin
+          cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+  report:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'report'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install issue controller
+        run: python -m pip install ./devin-issue-autopilot
+
+      - name: Publish observability report
+        env:
+          AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
+          DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
+          DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cd devin-issue-autopilot
+          python -m autopilot report --devin
+          cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+  daily-report:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install issue controller
+        run: python -m pip install ./devin-issue-autopilot
+
+      - name: Rebuild observability report
+        env:
+          AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
+          DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
+          DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cd devin-issue-autopilot
+          python -m autopilot report --devin
+          cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload observability report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: devin-issue-autopilot-report
+          path: devin-issue-autopilot/reports/summary.md
+          if-no-files-found: error
+          retention-days: 30

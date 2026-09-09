@@ -98,9 +98,75 @@ class SessionPullRequest(BaseModel):
 class SessionSnapshot(BaseModel):
     status: str
     status_detail: str | None = None
-    acus_consumed: float = 0
+    acus_consumed: float | None = None
     pull_requests: list[SessionPullRequest] = Field(default_factory=list)
     structured_output: StructuredResult | TriageResult | None = None
+
+
+class ReportComment(BaseModel):
+    """GitHub issue comment data needed for report reconstruction."""
+
+    author: str
+    body: str
+
+
+class ReportIssue(BaseModel):
+    """GitHub issue data needed for report reconstruction."""
+
+    number: int
+    url: str
+    state: str
+    labels: list[str]
+    comments: list[ReportComment]
+
+
+class ReportSession(BaseModel):
+    """Devin session data used to reconcile report rows."""
+
+    session_id: str
+    url: str
+    status: str
+    tags: list[str]
+    acus_consumed: float | None = None
+    pull_requests: list[SessionPullRequest] = Field(default_factory=list)
+
+
+class ReportPullRequest(BaseModel):
+    """Current GitHub pull request state and creation time."""
+
+    state: str
+    created_at: str
+
+
+class ReportSessionsPage(BaseModel):
+    """One page of Devin sessions and its pagination metadata."""
+
+    items: list[ReportSession]
+    has_next_page: bool = False
+    end_cursor: str | None = None
+
+
+class ReportRun(BaseModel):
+    """Normalized terminal autopilot run rendered in reports."""
+
+    source_id: str
+    issue: int
+    issue_url: str
+    issue_state: str
+    kind: Literal["triage", "fix"]
+    source: Literal["github", "simulation"] = "github"
+    session_role: str
+    session_url: str | None = None
+    state: str
+    pr_url: str | None = None
+    pr_state: str | None = None
+    ci: str | None = None
+    outcome: str
+    acus: float | None = None
+    elapsed: int = 0
+    nudges: int = 0
+    time_to_pr: int | None = None
+    needs_human: bool = False
 
 
 class PullRequest(BaseModel):
@@ -127,6 +193,7 @@ class Run(BaseModel):
     pr_url: str | None = None
     head_sha: str | None = None
     acus: float = 0
+    acus_reported: bool = False
     nudges: int = 0
     created: float
     updated: float

@@ -18,11 +18,12 @@ import json
 import re
 import statistics
 import shlex
+import sys
 import time
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from typing import Callable, Protocol
+from typing import Callable, Literal, Protocol
 
 import httpx
 from pydantic import ValidationError
@@ -30,6 +31,10 @@ from pydantic import ValidationError
 from autopilot.models import (
     Issue,
     PullRequest,
+    ReportIssue,
+    ReportPullRequest,
+    ReportRun,
+    ReportSession,
     Run,
     SessionCreate,
     SessionSnapshot,
@@ -63,6 +68,15 @@ class DevinAdapter(Protocol):
     def delete(self, session_id: str) -> None: ...
 
 
+class ReportDevinAdapter(Protocol):
+    """Optional Devin data source used to reconcile report rows."""
+
+    def list_report_sessions(self) -> list[ReportSession]:
+        """List autopilot sessions visible to the organization."""
+
+        ...
+
+
 class GitHubAdapter(Protocol):
     def list_issues(self) -> list[Issue]: ...
     def get_issue(
@@ -86,6 +100,15 @@ class GitHubAdapter(Protocol):
     def progress(self, issue: int, key: str, body: str) -> str: ...
     def conclude(self, issue: int, key: str, body: str, outcome: str) -> str: ...
     def conclude_triage(self, issue: int, key: str, body: str, labels: list[str]) -> str: ...
+    def report_issues(self) -> list[ReportIssue]:
+        """List labeled GitHub issues and their comments for reporting."""
+
+        ...
+
+    def report_pr(self, url: str) -> ReportPullRequest:
+        """Read the current state and creation time for a PR."""
+
+        ...
 
 
 class Engine:
@@ -225,11 +248,10 @@ class Engine:
         session_id = run.session_id
         snapshot = self.devin.get(session_id)
         updated = run.updated if run.state == "cancelling" else self.clock()
-        run = self.store.update(
-            run.run_id,
-            acus=snapshot.acus_consumed or run.acus,
-            updated=updated,
-        )
+        usage: dict[str, object] = {"updated": updated}
+        if snapshot.acus_consumed is not None:
+            usage.update(acus=snapshot.acus_consumed, acus_reported=True)
+        run = self.store.update(run.run_id, **usage)
         status = snapshot.status
         detail = snapshot.status_detail
         if status == "running" and detail == "waiting_for_user" and snapshot.structured_output:
@@ -453,11 +475,10 @@ class Engine:
         session_id = run.session_id
         snapshot = self.triage_devin.get(session_id)
         updated = run.updated if run.state == "cancelling" else self.clock()
-        run = self.store.update(
-            run.run_id,
-            acus=snapshot.acus_consumed or run.acus,
-            updated=updated,
-        )
+        usage: dict[str, object] = {"updated": updated}
+        if snapshot.acus_consumed is not None:
+            usage.update(acus=snapshot.acus_consumed, acus_reported=True)
+        run = self.store.update(run.run_id, **usage)
         status = snapshot.status
         detail = snapshot.status_detail
         if status == "running" and detail == "waiting_for_user" and snapshot.structured_output:
@@ -562,8 +583,9 @@ class Engine:
                     ("Session", run.session_url or "not started"),
                     ("Target", self._target(run)),
                     ("Outcome", f"**{output.outcome}**"),
-                    ("ACUs", f"{run.acus:.2f}"),
+                    ("ACUs", _run_acus(run)),
                     ("Elapsed", f"{int(self.clock() - run.created)}s"),
+                    ("Nudges", str(run.nudges)),
                     ("Run key", f"`{run.key}`"),
                 ],
                 "\n\n".join(sections),
@@ -730,8 +752,9 @@ class Engine:
                     ("Target", self._target(run)),
                     ("Outcome", f"**{outcome}**"),
                     ("Reason", self._github_text(note) or "Triage could not complete."),
-                    ("ACUs", f"{run.acus:.2f}"),
+                    ("ACUs", _run_acus(run)),
                     ("Elapsed", f"{int(self.clock() - run.created)}s"),
+                    ("Nudges", str(run.nudges)),
                     ("Run key", f"`{run.key}`"),
                 ],
                 "A maintainer can update the issue and retrigger triage.",
@@ -790,8 +813,13 @@ class Engine:
             ("Outcome", f"**{outcome}**"),
             ("Reason", self._github_text(note) or self._default_reason(outcome)),
             ("Next action", self._next_action(outcome)),
-            ("ACUs", f"{run.acus:.2f}"),
+            ("ACUs", _run_acus(run)),
             ("Elapsed", f"{int(self.clock() - run.created)}s"),
+            (
+                "Time to PR",
+                f"{int(run.pr_opened - run.created)}s" if run.pr_opened is not None else "n/a",
+            ),
+            ("Nudges", str(run.nudges)),
             ("Run key", f"`{run.key}`"),
         ]
         sections: list[str] = []
@@ -927,66 +955,393 @@ class Engine:
             self.advance(run)
 
 
-def write_report(store: Store, path: Path = Path("reports/summary.md")) -> str:
-    runs = store.all()
+_REPORT_MARKER = re.compile(r"<!-- (devin-issue-autopilot|devin-triage-request):([0-9a-f]{16}) -->")
+_REPORT_FIELD = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|$")
+
+
+def rebuild_report(
+    github: GitHubAdapter,
+    store: Store,
+    devin: ReportDevinAdapter | None = None,
+    path: Path = Path("reports/summary.md"),
+) -> str:
+    """Rebuild the report from durable GitHub issue and pull-request data."""
+
+    runs: list[ReportRun] = []
+    bodies: dict[str, str] = {}
+    for issue in github.report_issues():
+        for comment in issue.comments:
+            run = _parse_report_comment(issue, comment.author, comment.body)
+            if run is not None:
+                runs.append(run)
+                bodies[run.source_id] = comment.body
+    if devin is not None:
+        try:
+            sessions = devin.list_report_sessions()
+        except httpx.HTTPError as error:
+            print(f"Devin reconciliation unavailable: {error}", file=sys.stderr)
+        else:
+            _reconcile_devin(runs, sessions)
+    for run in runs:
+        if run.pr_url is None:
+            continue
+        try:
+            pull = github.report_pr(run.pr_url)
+        except (ValueError, httpx.HTTPStatusError):
+            run.pr_state = "unknown"
+            continue
+        run.pr_state = pull.state
+        started = _field_datetime(bodies[run.source_id], "Started")
+        if started is not None:
+            try:
+                created_at = datetime.fromisoformat(pull.created_at)
+            except ValueError:
+                continue
+            run.time_to_pr = max(0, int((created_at - started).total_seconds()))
+    runs.sort(key=lambda run: (run.issue, run.kind, run.source_id))
+    store.replace_report_runs(runs)
+    return write_report(runs, path)
+
+
+def _parse_report_comment(
+    issue: ReportIssue,
+    author: str,
+    body: str,
+) -> ReportRun | None:
+    """Parse one terminal GitHub Actions lifecycle comment."""
+
+    if author != "github-actions[bot]":
+        return None
+    markers = _REPORT_MARKER.findall(body)
+    fields = _report_fields(body)
+    if not markers or "Outcome" not in fields or "Elapsed" not in fields:
+        return None
+    marker, digest = markers[-1]
+    kind: Literal["triage", "fix"] = "triage" if marker == "devin-triage-request" else "fix"
+    outcome = _report_value(fields["Outcome"])
+    if not outcome or outcome == "pending":
+        return None
+    session_url = _optional_report_value(fields.get("Session"))
+    pr_url = _optional_report_value(fields.get("Pull request") or fields.get("PR"))
+    ci = _optional_report_value(fields.get("Verification") or fields.get("CI"))
+    state = (
+        "triaged"
+        if kind == "triage" and outcome in {"triaged", "needs_info", "needs_maintainer"}
+        else outcome
+    )
+    needs_human_labels = {
+        "devin-needs-human",
+        "devin-needs-info",
+        "devin-needs-maintainer",
+    }
+    return ReportRun(
+        source_id=f"{issue.number}:{marker}:{digest}",
+        issue=issue.number,
+        issue_url=issue.url,
+        issue_state=issue.state,
+        kind=kind,
+        session_role="triage" if kind == "triage" else "remediation",
+        session_url=session_url,
+        state=state,
+        pr_url=pr_url,
+        ci=ci,
+        outcome=outcome,
+        acus=_report_float(fields.get("ACUs")),
+        elapsed=_report_seconds(fields.get("Elapsed")),
+        nudges=_report_int(fields.get("Nudges")),
+        time_to_pr=_report_seconds(fields.get("Time to PR")) or None,
+        needs_human=bool(needs_human_labels.intersection(issue.labels)),
+    )
+
+
+def _report_fields(body: str) -> dict[str, str]:
+    """Extract field-value rows from a lifecycle Markdown table."""
+
+    fields: dict[str, str] = {}
+    for line in body.splitlines():
+        match = _REPORT_FIELD.match(line)
+        if match is not None and match.group(1) != "Field":
+            fields[match.group(1).strip()] = match.group(2).strip()
+    return fields
+
+
+def _report_value(value: str) -> str:
+    """Normalize a Markdown report field value."""
+
+    return value.strip().strip("*`").replace("<br>", " ").strip()
+
+
+def _optional_report_value(value: str | None) -> str | None:
+    """Normalize an optional Markdown report field value."""
+
+    if value is None:
+        return None
+    cleaned = _report_value(value)
+    if cleaned.casefold() in {"", "-", "n/a", "none", "not started"}:
+        return None
+    return cleaned
+
+
+def _report_float(value: str | None) -> float | None:
+    """Parse a report field as a float without inventing telemetry."""
+
+    try:
+        return float(_report_value(value or ""))
+    except ValueError:
+        return None
+
+
+def _run_acus(run: Run) -> str:
+    """Render raw session usage without conflating missing data and zero."""
+
+    return f"{run.acus:.2f}" if run.acus_reported else "unknown"
+
+
+def _report_int(value: str | None) -> int:
+    """Parse a report field as an integer with a zero fallback."""
+
+    try:
+        return int(_report_value(value or "0"))
+    except ValueError:
+        return 0
+
+
+def _report_seconds(value: str | None) -> int:
+    """Parse a seconds-valued report field with a zero fallback."""
+
+    cleaned = _report_value(value or "0").removesuffix("s")
+    try:
+        return int(float(cleaned))
+    except ValueError:
+        return 0
+
+
+def _field_datetime(body: str, name: str) -> datetime | None:
+    """Parse an ISO datetime from a named lifecycle comment field."""
+
+    value = _optional_report_value(_report_fields(body).get(name))
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _reconcile_devin(runs: list[ReportRun], sessions: list[ReportSession]) -> None:
+    """Reconcile report runs with Devin ACU and pull-request data."""
+
+    by_url = {session.url: session for session in sessions}
+    by_issue_kind: dict[tuple[int, str], list[ReportSession]] = {}
+    for session in sessions:
+        issue_tags = [tag for tag in session.tags if tag.startswith("issue:")]
+        role = (
+            "triage"
+            if "role:triage" in session.tags
+            else "fix"
+            if "role:remediation" in session.tags
+            else None
+        )
+        if role is None:
+            continue
+        for tag in issue_tags:
+            try:
+                issue_number = int(tag.removeprefix("issue:"))
+            except ValueError:
+                continue
+            by_issue_kind.setdefault((issue_number, role), []).append(session)
+    for run in runs:
+        matched_session = by_url.get(run.session_url or "")
+        if matched_session is None:
+            candidates = by_issue_kind.get((run.issue, run.kind), [])
+            if len(candidates) == 1:
+                matched_session = candidates[0]
+        if matched_session is None:
+            continue
+        run.session_url = matched_session.url
+        run.acus = matched_session.acus_consumed
+        for tag in matched_session.tags:
+            if tag.startswith("role:"):
+                run.session_role = tag.removeprefix("role:")
+                break
+        if "simulation" in matched_session.tags or "role:simulation" in matched_session.tags:
+            run.source = "simulation"
+        if run.pr_url is None and matched_session.pull_requests:
+            run.pr_url = matched_session.pull_requests[0].pr_url
+
+
+def write_report(
+    runs_or_store: list[ReportRun] | Store,
+    path: Path = Path("reports/summary.md"),
+    repository: str = "ong6/superset",
+) -> str:
+    """Render the report and write the same Markdown returned to the caller."""
+
+    if isinstance(runs_or_store, Store):
+        runs = runs_or_store.cached_report_runs()
+        if not runs:
+            runs = [
+                ReportRun(
+                    source_id=run.run_id,
+                    issue=run.issue,
+                    issue_url=f"https://github.com/{repository}/issues/{run.issue}",
+                    issue_state="unknown",
+                    kind="triage" if ":triage:" in run.key else "fix",
+                    source="simulation",
+                    session_role="triage" if ":triage:" in run.key else "remediation",
+                    session_url=run.session_url,
+                    state=run.state,
+                    pr_url=run.pr_url,
+                    ci=run.ci,
+                    outcome=run.outcome or run.state,
+                    acus=run.acus if run.acus_reported else None,
+                    elapsed=int(run.updated - run.created),
+                    nudges=run.nudges,
+                    time_to_pr=(
+                        int(run.pr_opened - run.created) if run.pr_opened is not None else None
+                    ),
+                    needs_human=run.outcome not in {None, "verified", "triaged"},
+                )
+                for run in runs_or_store.all()
+            ]
+    else:
+        runs = runs_or_store
     headers = [
         "issue",
-        "session URL",
+        "kind",
+        "source",
+        "role",
+        "session",
         "state",
-        "started",
-        "elapsed",
-        "ACUs",
         "PR",
         "CI",
         "outcome",
+        "ACUs",
+        "elapsed",
         "nudges",
     ]
-    rows: list[list[str]] = []
-    now = time.time()
-    for run in runs:
-        rows.append(
-            [
-                str(run.issue),
-                run.session_url or "-",
-                run.state,
-                datetime.fromtimestamp(run.created, UTC).isoformat(timespec="seconds"),
-                f"{int((run.updated if run.state in TERMINAL else now) - run.created)}s",
-                f"{run.acus:.2f}",
-                run.pr_url or "-",
-                run.ci or "-",
-                run.outcome or "-",
-                str(run.nudges),
-            ]
-        )
-    widths = (
+    rows = [
         [
-            max(len(headers[index]), *(len(row[index]) for row in rows))
-            for index in range(len(headers))
+            f"[#{run.issue}]({run.issue_url}) ({run.issue_state})",
+            run.kind,
+            run.source,
+            run.session_role,
+            f"[session]({run.session_url})" if run.session_url else "-",
+            run.state,
+            (
+                f"[PR]({run.pr_url}) ({run.pr_state})"
+                if run.pr_url is not None and run.pr_state is not None
+                else f"[PR]({run.pr_url})"
+                if run.pr_url is not None
+                else "-"
+            ),
+            run.ci or "-",
+            run.outcome,
+            f"{run.acus:.2f}" if run.acus is not None else "unknown",
+            f"{run.elapsed}s",
+            str(run.nudges),
         ]
-        if rows
-        else [len(header) for header in headers]
+        for run in runs
+    ]
+    run_count = len(runs)
+    fix_runs = [
+        run
+        for run in runs
+        if run.kind == "fix" and run.source != "simulation" and run.session_role == "remediation"
+    ]
+    fix_attempted = len(fix_runs)
+    pr_opened = sum(run.pr_url is not None for run in fix_runs)
+    controller_verified = sum(run.outcome == "verified" for run in fix_runs)
+    merged = sum(run.pr_state == "merged" for run in fix_runs)
+    verified_and_merged = sum(
+        run.outcome == "verified" and run.pr_state == "merged" for run in fix_runs
     )
-    line = " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers))
-    table = [line, "-+-".join("-" * width for width in widths)]
-    table.extend(
-        " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)) for row in rows
+    pr_times = [run.time_to_pr for run in fix_runs if run.time_to_pr is not None]
+    reported_acus = [run.acus for run in runs if run.acus is not None]
+    acus_total = sum(reported_acus)
+    zero_acus = sum(acu == 0 for acu in reported_acus)
+    reported_live_repair_acus = [run.acus for run in fix_runs if run.acus is not None]
+    live_repair_acus_total = sum(reported_live_repair_acus)
+    live_repair_ratio = (
+        f"{live_repair_acus_total / controller_verified:.2f} raw "
+        f"({len(reported_live_repair_acus)}/{fix_attempted} live repairs reported; "
+        "not billing/cost)"
+        if controller_verified and len(reported_live_repair_acus) == fix_attempted
+        else "n/a (complete raw live-repair telemetry and a CI/policy-verified PR are required)"
     )
-    pr_times = [run.pr_opened - run.created for run in runs if run.pr_opened is not None]
-    totals = {
-        "Attempted": len(runs),
-        "PR opened": sum(run.pr_url is not None for run in runs),
-        "CI green": sum(run.ci == "success" for run in runs),
-        "Verified": sum(run.outcome == "verified" for run in runs),
-        "ACUs total": f"{sum(run.acus for run in runs):.2f}",
-        "Median time to PR": f"{statistics.median(pr_times):.0f}s" if pr_times else "n/a",
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
+    totals: list[tuple[str, str | int]] = [
+        ("Triaged", f"{sum(run.state == 'triaged' for run in runs)}/{run_count} runs"),
+        ("Fix attempted", f"{fix_attempted}/{run_count} runs"),
+        ("Simulated", f"{sum(run.source == 'simulation' for run in runs)}/{run_count} runs"),
+        (
+            "Setup/build",
+            f"{sum(run.session_role in {'setup', 'build'} for run in runs)}/{run_count} runs",
+        ),
+        ("PR opened", f"{pr_opened}/{fix_attempted} fix attempts"),
+        (
+            "CI/policy verified",
+            f"{controller_verified}/{fix_attempted} fix attempts",
+        ),
+        ("Merged", f"{merged}/{fix_attempted} fix attempts"),
+        (
+            "Verified-and-merged",
+            f"{verified_and_merged}/{fix_attempted} fix attempts",
+        ),
+        (
+            "Verified-to-merged conversion rate",
+            (
+                f"{verified_and_merged}/{controller_verified} "
+                f"({verified_and_merged / controller_verified:.1%})"
+                if controller_verified
+                else "n/a (0 CI/policy-verified PRs)"
+            ),
+        ),
+        (
+            "ci_failed",
+            f"{sum(run.outcome == 'ci_failed' for run in fix_runs)}/{fix_attempted} fix attempts",
+        ),
+        (
+            "policy_rejected",
+            f"{sum(run.outcome == 'policy_rejected' for run in fix_runs)}/{fix_attempted} fix attempts",
+        ),
+        ("needs-human", f"{sum(run.needs_human for run in runs)}/{run_count} runs"),
+        (
+            "Median time to PR",
+            f"{statistics.median(pr_times):.0f}s ({len(pr_times)}/{pr_opened} PRs timed)"
+            if pr_times
+            else f"n/a (0/{pr_opened} PRs timed)",
+        ),
+        (
+            "ACUs total",
+            f"{acus_total:.2f} raw across {len(reported_acus)}/{run_count} runs",
+        ),
+        ("Reported zero ACUs", f"{zero_acus}/{len(reported_acus)} reported runs"),
+        ("Live repair ACUs per CI/policy-verified PR", live_repair_ratio),
+        (
+            "Verified rate",
+            f"{controller_verified}/{fix_attempted} ({controller_verified / fix_attempted:.1%})"
+            if fix_attempted
+            else "n/a (0 fix attempts)",
+        ),
+    ]
+    table = [
+        "| " + " | ".join(headers) + " |",
+        "|" + "|".join("---" for _ in headers) + "|",
+        *["| " + " | ".join(row) + " |" for row in rows],
+    ]
     markdown = (
         "# Autopilot report\n\n"
-        + "\n".join(f"- {name}: {value}" for name, value in totals.items())
-        + "\n\n```\n"
-        + "\n".join(table)
-        + "\n```\n"
+        + "\n".join(f"- {name}: {value}" for name, value in totals)
+        + "\n\nACU telemetry is raw API data: zero is preserved, unknown is not zero, "
+        "and neither establishes billing or monetary cost. The daily ACU gate only "
+        "sums reported usage in the current runner's local cache; missing telemetry "
+        "is not counted and the cache is not durable across workflow runs. Session "
+        "caps remain 4/1 ACUs and 2400s/600s for remediation/triage, with one/zero "
+        "nudges.\n\n"
+        "How to read this: rows preserve every available terminal GitHub Actions "
+        "comment; CI/policy verified is the controller's ready-for-review outcome, "
+        "while merged and verified-and-merged are separate measures.\n\n" + "\n".join(table) + "\n"
     )
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(markdown)
-    return "\n".join(table)
+    return markdown

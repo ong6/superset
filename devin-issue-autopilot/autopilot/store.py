@@ -18,7 +18,7 @@ import time
 import uuid
 from pathlib import Path
 
-from autopilot.models import Issue, Run
+from autopilot.models import Issue, ReportRun, Run
 
 
 class Store:
@@ -30,7 +30,9 @@ class Store:
             CREATE TABLE IF NOT EXISTS runs (
               run_id TEXT PRIMARY KEY, issue INTEGER NOT NULL, key TEXT UNIQUE NOT NULL,
               session_id TEXT, session_url TEXT, state TEXT NOT NULL, pr_url TEXT,
-              head_sha TEXT, acus REAL NOT NULL DEFAULT 0, nudges INTEGER NOT NULL DEFAULT 0,
+              head_sha TEXT, acus REAL NOT NULL DEFAULT 0,
+              acus_reported INTEGER NOT NULL DEFAULT 0,
+              nudges INTEGER NOT NULL DEFAULT 0,
               created REAL NOT NULL, updated REAL NOT NULL, issue_title TEXT NOT NULL,
               issue_body TEXT NOT NULL, label_at TEXT NOT NULL, label_actor TEXT NOT NULL DEFAULT '',
               outcome TEXT, ci TEXT,
@@ -42,6 +44,16 @@ class Store:
             CREATE TABLE IF NOT EXISTS transitions (
               run_id TEXT NOT NULL, "from" TEXT, "to" TEXT NOT NULL,
               at REAL NOT NULL, note TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS report_runs (
+              source_id TEXT PRIMARY KEY, issue INTEGER NOT NULL, issue_url TEXT NOT NULL,
+              issue_state TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL,
+              session_role TEXT NOT NULL, session_url TEXT, state TEXT NOT NULL,
+              pr_url TEXT, pr_state TEXT,
+              ci TEXT, outcome TEXT NOT NULL, acus REAL NOT NULL DEFAULT 0,
+              acus_reported INTEGER NOT NULL DEFAULT 0,
+              elapsed INTEGER NOT NULL DEFAULT 0, nudges INTEGER NOT NULL DEFAULT 0,
+              time_to_pr INTEGER, needs_human INTEGER NOT NULL DEFAULT 0
             );
             """
         )
@@ -59,6 +71,24 @@ class Store:
                 self.connection.execute(
                     f"ALTER TABLE runs ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"
                 )
+        if "acus_reported" not in columns:
+            self.connection.execute(
+                "ALTER TABLE runs ADD COLUMN acus_reported INTEGER NOT NULL DEFAULT 0"
+            )
+            self.connection.execute("UPDATE runs SET acus_reported = 1 WHERE acus != 0")
+        report_columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(report_runs)").fetchall()
+        }
+        for name in ("issue_url", "issue_state", "source", "session_role"):
+            if name not in report_columns:
+                self.connection.execute(
+                    f"ALTER TABLE report_runs ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"
+                )
+        if "acus_reported" not in report_columns:
+            self.connection.execute(
+                "ALTER TABLE report_runs ADD COLUMN acus_reported INTEGER NOT NULL DEFAULT 0"
+            )
         self.connection.commit()
 
     def claim(self, issue: Issue, now: float | None = None) -> Run:
@@ -87,6 +117,7 @@ class Store:
             self.connection.execute(
                 'INSERT INTO transitions VALUES (?, NULL, "new", ?, "")', (run_id, at)
             )
+            self._log_transition(issue.number, run_id, None, "new", 0)
         self.connection.commit()
         row = self.connection.execute("SELECT * FROM runs WHERE key = ?", (issue.key,)).fetchone()
         assert row is not None
@@ -112,6 +143,13 @@ class Store:
             self.connection.execute(
                 'INSERT INTO transitions VALUES (?, "new", "creating", ?, "")',
                 (run.run_id, at),
+            )
+            self._log_transition(
+                run.issue,
+                run.run_id,
+                "new",
+                "creating",
+                int(at - run.created),
             )
         self.connection.commit()
         return self.get(run.run_id), bool(updated.rowcount)
@@ -140,6 +178,13 @@ class Store:
         self.connection.execute(
             "INSERT INTO transitions VALUES (?, ?, ?, ?, ?)",
             (run.run_id, run.state, state, at, note[:500]),
+        )
+        self._log_transition(
+            run.issue,
+            run.run_id,
+            run.state,
+            state,
+            int(at - run.created),
         )
         values.update(state=state, updated=at)
         assignments = ", ".join(f"{name} = ?" for name in values)
@@ -179,9 +224,82 @@ class Store:
         rows = self.connection.execute("SELECT * FROM runs ORDER BY created").fetchall()
         return [Run.model_validate(dict(row)) for row in rows]
 
+    def replace_report_runs(self, runs: list[ReportRun]) -> None:
+        """Replace the local report cache with rebuilt rows."""
+
+        self.connection.execute("DELETE FROM report_runs")
+        self.connection.executemany(
+            """
+            INSERT INTO report_runs
+              (source_id, issue, issue_url, issue_state, kind, source, session_role,
+               session_url, state, pr_url, pr_state, ci, outcome, acus, elapsed,
+               acus_reported, nudges, time_to_pr, needs_human)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    run.source_id,
+                    run.issue,
+                    run.issue_url,
+                    run.issue_state,
+                    run.kind,
+                    run.source,
+                    run.session_role,
+                    run.session_url,
+                    run.state,
+                    run.pr_url,
+                    run.pr_state,
+                    run.ci,
+                    run.outcome,
+                    run.acus or 0,
+                    run.elapsed,
+                    int(run.acus is not None),
+                    run.nudges,
+                    run.time_to_pr,
+                    int(run.needs_human),
+                )
+                for run in runs
+            ],
+        )
+        self.connection.commit()
+
+    def cached_report_runs(self) -> list[ReportRun]:
+        """Return normalized rows from the local report cache."""
+
+        rows = self.connection.execute(
+            "SELECT * FROM report_runs ORDER BY issue, kind, source_id"
+        ).fetchall()
+        return [
+            ReportRun.model_validate(
+                {
+                    **dict(row),
+                    "acus": row["acus"] if row["acus_reported"] else None,
+                    "needs_human": bool(row["needs_human"]),
+                }
+            )
+            for row in rows
+        ]
+
     def acus_since(self, timestamp: float) -> float:
         row = self.connection.execute(
             "SELECT COALESCE(SUM(acus), 0) AS total FROM runs WHERE created >= ?",
             (timestamp,),
         ).fetchone()
         return float(row["total"])
+
+    @staticmethod
+    def _log_transition(
+        issue: int,
+        run_id: str,
+        source: str | None,
+        target: str,
+        elapsed: int,
+    ) -> None:
+        """Emit one grep-friendly transition timeline entry."""
+
+        print(
+            "transition "
+            f"issue={issue} run_id={run_id} from={source or '-'} "
+            f"to={target} elapsed={elapsed}s",
+            flush=True,
+        )

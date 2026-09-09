@@ -45,6 +45,10 @@ services:
     profiles: [report]
     environment:
       AUTOPILOT_DB: /data/autopilot.db
+      DEVIN_API_KEY: ${DEVIN_API_KEY:-}
+      DEVIN_ORG_ID: ${DEVIN_ORG_ID:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPO: ${GITHUB_REPO:-ong6/superset}
     volumes:
       - autopilot-data:/data
       - ./reports:/app/reports
