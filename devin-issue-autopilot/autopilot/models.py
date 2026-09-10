@@ -13,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import re
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +30,7 @@ class Issue(BaseModel):
     body: str
     label_at: str
     label_actor: str = ""
+    again: bool = False
 
     def section(self, name: str) -> str:
         match = re.search(rf"(?ms)^## {re.escape(name)}\s*\n(.*?)(?=^## |\Z)", self.body)
@@ -53,8 +56,42 @@ class Issue(BaseModel):
         return match.group("command").strip() if match is not None else value
 
     @property
+    def purpose(self) -> str:
+        purpose = self.label_at.partition(":")[0]
+        return purpose if purpose in {"fix", "retry", "triage"} else "fix"
+
+    @property
+    def contract_hash(self) -> str:
+        contract = {
+            "title": self.title.strip(),
+            "symptom": self.section("Symptom"),
+            "reproduction": self.section("Reproduction") or self.section("Repro"),
+            "expected": self.section("Expected"),
+            "allowed_paths": self.allowed_paths,
+            "forbidden": self.section("Forbidden"),
+            "acceptance_command": self.acceptance_command,
+            "check_name": self.check_name,
+        }
+        payload = json.dumps(
+            contract,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return sha256(payload.encode()).hexdigest()[:16]
+
+    @property
+    def contract_key(self) -> str:
+        if self.purpose == "triage":
+            return f"{self.number}:{self.label_at}"
+        return f"{self.number}:{self.purpose}:{self.contract_hash}"
+
+    @property
     def key(self) -> str:
-        return f"{self.number}:{self.label_at}"
+        if not self.again:
+            return self.contract_key
+        attempt = sha256(self.label_at.encode()).hexdigest()[:8]
+        return f"{self.contract_key}:again:{attempt}"
 
 
 class StructuredResult(BaseModel):
@@ -240,6 +277,7 @@ class Run(BaseModel):
     run_id: str
     issue: int
     key: str
+    contract_key: str = ""
     session_id: str | None = None
     session_url: str | None = None
     state: str

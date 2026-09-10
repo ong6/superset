@@ -26,6 +26,11 @@ from autopilot.models import Settings
 from autopilot.store import Store
 
 app = typer.Typer(no_args_is_help=True)
+CONTROLLER_ERROR_STATES = {"devin_error"}
+
+
+def once_exit_code(state: str) -> int:
+    return int(state not in TERMINAL or state in CONTROLLER_ERROR_STATES)
 
 
 def real_engine(
@@ -66,14 +71,27 @@ def once(
     actor: str | None = typer.Option(None, "--actor"),
     requested_at: str | None = typer.Option(None, "--requested-at"),
     purpose: str = typer.Option("fix", "--purpose"),
+    again: bool = typer.Option(False, "--again"),
 ) -> None:
     if purpose not in {"fix", "retry"}:
         raise typer.BadParameter("must be fix or retry", param_hint="--purpose")
     engine = real_engine()
-    result = engine.run_issue(engine.github.get_issue(issue, actor, requested_at, purpose))
-    typer.echo(f"{result.issue}: {result.state}")
-    if result.state != "verified":
-        raise typer.Exit(1)
+    item = engine.github.get_issue(issue, actor, requested_at, purpose, again)
+    if (existing := engine.existing_work(item)) is not None:
+        engine.reply_existing_work(item, existing)
+        typer.echo(f"autopilot summary: issue={issue} outcome=running session={existing.url}")
+        return
+    if not again and (outcome := engine.completed_contract_outcome(item)) is not None:
+        engine.reply_completed_contract(item, outcome)
+        typer.echo(f"autopilot summary: issue={issue} outcome={outcome} session=not_created")
+        return
+    result = engine.run_issue(item)
+    exit_code = once_exit_code(result.state)
+    typer.echo(
+        f"autopilot summary: issue={result.issue} outcome={result.state} exit_code={exit_code}"
+    )
+    if exit_code:
+        raise typer.Exit(exit_code)
 
 
 @app.command()

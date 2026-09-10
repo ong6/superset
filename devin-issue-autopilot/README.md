@@ -37,8 +37,9 @@ make once ISSUE=123
 make report
 ```
 
-The Compose service polls every 30 seconds. `once` exits non-zero unless the
-issue reaches `verified`.
+The Compose service polls every 30 seconds. `once` exits zero for legitimate
+terminal outcomes, including `no_change`, `blocked`, `needs_human`, and
+`check_skipped`; it exits non-zero only for controller errors.
 
 ## Reviewer path, tested on 2026-09-10
 
@@ -80,7 +81,8 @@ The `Devin issue automation` workflow triages opened or reopened issues unless
 `devin-exclude` is present. Maintainers can request a fresh brief with
 `devin-triage` or manual `triage` dispatch. Remediation starts only when an
 authorized repository maintainer applies `devin-fix`/`devin-retry`, comments
-`/devin fix` or `/devin retry`, or manually dispatches `remediate`.
+`/devin fix`, `/devin fix --again`, or `/devin retry`, or manually dispatches
+`remediate`.
 
 Configure the repository under **Settings > Secrets and variables > Actions**:
 
@@ -93,12 +95,16 @@ Configure the repository under **Settings > Secrets and variables > Actions**:
 GitHub access uses the workflow's short-lived `GITHUB_TOKEN`. Triage uses the
 separate read-only Devin identity, receives no session secrets, requires approval
 for actions, and is rejected if it opens a pull request. The workflow serializes
-work per issue, updates one durable lifecycle comment, and uses terminal request
-markers to prevent duplicate sessions. Each claimed job restores the controller
-SQLite database from an `actions/cache` prefix and saves a new cache entry after
-execution, including failure. This is best-effort persistence: concurrent jobs
-for different issues can restore the same snapshot and race when their divergent
-databases are saved.
+work per issue and keys remediation by issue, purpose, and the current issue
+contract hash. A matching non-terminal persisted run, or an open Devin session
+whose title carries the issue number, is linked instead of creating a duplicate.
+After a terminal outcome, the same `/devin fix` contract is ignored until the
+issue contract changes; `/devin fix --again` explicitly authorizes one new
+attempt. One durable lifecycle comment records each contract's progress and
+outcome. Each claimed job restores the controller SQLite database from an
+`actions/cache` prefix and saves a new cache entry after execution, including
+failure. This is best-effort persistence: concurrent jobs for different issues
+can restore the same snapshot and race when their divergent databases are saved.
 
 ## How would an engineering leader know this is working?
 
@@ -122,6 +128,7 @@ The `devin-issue-autopilot-report` artifact shows the three decision totals:
 | `devin-needs-info` | Reporter details are missing |
 | `devin-needs-maintainer` | Maintainer decision is required |
 | `/devin fix` or `devin-fix` | Authorized maintainer starts bounded remediation |
+| `/devin fix --again` | Explicitly authorizes another attempt for an unchanged terminal issue contract |
 | `/devin retry` or `devin-retry` | Authorized maintainer starts a new bounded remediation attempt |
 
 A newly opened issue moves from `devin-triaging` to `devin-candidate` when its
@@ -191,7 +198,7 @@ gh workflow run devin-issue-autopilot.yml --repo ong6/superset -f mode=report
 | CI verification | Requires an open PR and successful named check run or commit status on its head SHA |
 | Issue linkage | Requires the pull request body to close the source issue |
 | Restart safety | Both runtimes claim `new → creating` atomically, persist `session_id` before polling, and never blindly recreate it. Compose keeps the database on the `autopilot-data` volume. Actions restores and saves the database with `actions/cache`, so resume state is best-effort and concurrent jobs can race. |
-| Idempotent output | Updates one durable lifecycle comment and rejects duplicate terminal request markers |
+| Contract idempotency | Uses issue, purpose, and contract hash to reuse active work; unchanged terminal contracts require `/devin fix --again` |
 | Label reconciliation | Removes trigger and conflicting terminal labels before applying the outcome |
 | Workflow claim | Serializes by issue and rejects existing triage or remediation claims |
 
@@ -230,6 +237,9 @@ the repository; artifacts are retained for 30 days.
 This is a one-repository pilot. It does not merge pull requests, bypass branch
 protection, run on excluded issues, provide a shared queue, or verify patches in
 a separate clean-room publisher.
+
+Changing the issue contract permits a later `/devin fix`; without a contract
+change, use `/devin fix --again` to intentionally authorize another session.
 
 Day-to-day status links are in the [fork README](../README.md#devin-workflow-current-issue-status);
 the longer maintainer and recording procedure is in

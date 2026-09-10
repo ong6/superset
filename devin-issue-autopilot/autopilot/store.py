@@ -29,6 +29,7 @@ class Store:
             """
             CREATE TABLE IF NOT EXISTS runs (
               run_id TEXT PRIMARY KEY, issue INTEGER NOT NULL, key TEXT UNIQUE NOT NULL,
+              contract_key TEXT NOT NULL DEFAULT '',
               session_id TEXT, session_url TEXT, state TEXT NOT NULL, pr_url TEXT,
               head_sha TEXT, acus REAL NOT NULL DEFAULT 0,
               acus_reported INTEGER NOT NULL DEFAULT 0,
@@ -69,6 +70,7 @@ class Store:
             "summary",
             "structured_output",
             "acu_guard_source",
+            "contract_key",
         ):
             if name not in columns:
                 self.connection.execute(
@@ -78,6 +80,7 @@ class Store:
             self.connection.execute(
                 "ALTER TABLE runs ADD COLUMN acu_guard_total REAL NOT NULL DEFAULT 0"
             )
+        self.connection.execute("UPDATE runs SET contract_key = key WHERE contract_key = ''")
         if "acus_reported" not in columns:
             self.connection.execute(
                 "ALTER TABLE runs ADD COLUMN acus_reported INTEGER NOT NULL DEFAULT 0"
@@ -104,14 +107,15 @@ class Store:
         inserted = self.connection.execute(
             """
             INSERT OR IGNORE INTO runs
-              (run_id, issue, key, state, created, updated, issue_title, issue_body,
+              (run_id, issue, key, contract_key, state, created, updated, issue_title, issue_body,
                label_at, label_actor)
-            VALUES (?, ?, ?, 'new', ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
                 issue.number,
                 issue.key,
+                issue.contract_key,
                 at,
                 at,
                 issue.title,
@@ -129,6 +133,44 @@ class Store:
         row = self.connection.execute("SELECT * FROM runs WHERE key = ?", (issue.key,)).fetchone()
         assert row is not None
         return Run.model_validate(dict(row))
+
+    def for_contract(self, contract_key: str) -> list[Run]:
+        rows = self.connection.execute(
+            "SELECT * FROM runs WHERE contract_key = ? ORDER BY created DESC",
+            (contract_key,),
+        ).fetchall()
+        return [Run.model_validate(dict(row)) for row in rows]
+
+    def active_for_contract(self, contract_key: str) -> Run | None:
+        terminal = (
+            "verified",
+            "merged",
+            "merged_unverified",
+            "check_skipped",
+            "ci_failed",
+            "policy_rejected",
+            "no_pr",
+            "pr_closed",
+            "blocked",
+            "no_change",
+            "timed_out",
+            "stale_sha",
+            "devin_error",
+            "triaged",
+            "triage_failed",
+            "needs_human",
+        )
+        placeholders = ",".join("?" for _ in terminal)
+        row = self.connection.execute(
+            f"""
+            SELECT * FROM runs
+            WHERE contract_key = ? AND state NOT IN ({placeholders})
+            ORDER BY created DESC
+            LIMIT 1
+            """,
+            (contract_key, *terminal),
+        ).fetchone()
+        return Run.model_validate(dict(row)) if row is not None else None
 
     def get(self, run_id: str) -> Run:
         row = self.connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
@@ -217,9 +259,9 @@ class Store:
             "timed_out",
             "stale_sha",
             "devin_error",
-            "no_change",
             "triaged",
             "triage_failed",
+            "needs_human",
         )
         placeholders = ",".join("?" for _ in terminal)
         rows = self.connection.execute(

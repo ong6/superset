@@ -23,7 +23,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from typer.testing import CliRunner
 
+import autopilot.__main__ as cli
 from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
 from autopilot.engine import Engine, _report_backlog_issue, rebuild_report, write_report
 from autopilot.models import (
@@ -318,13 +320,147 @@ def test_session_prompt_links_the_source_issue(tmp_path: Path) -> None:
 def test_duplicate_label_does_not_create_second_session(tmp_path: Path) -> None:
     url = "https://github.com/ong6/superset/pull/10"
     engine, devin, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    repeated_comment = item.model_copy(update={"label_at": "fix:2026-09-08T10:01:00Z"})
 
     first = engine.run_issue(item, sleep=lambda _: None)
-    second = engine.run_issue(item, sleep=lambda _: None)
+    second = engine.run_issue(repeated_comment, sleep=lambda _: None)
 
     assert first.run_id == second.run_id
+    assert first.contract_key == repeated_comment.contract_key
     assert devin.create_calls == 1
     assert len(github.comments) == 1
+
+
+@pytest.mark.parametrize("state", ["merged", "merged_unverified", "pr_closed"])
+def test_completed_pr_outcomes_are_not_reported_as_active(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    engine, _, _, item = setup_engine(tmp_path, [])
+    run = engine.claim(item)
+    engine.store.update(
+        run.run_id,
+        state=state,
+        outcome=state,
+        comment_id="1",
+    )
+
+    assert engine.existing_work(item) is None
+    assert engine.completed_contract_outcome(item) == state
+
+
+def test_duplicate_comment_links_open_session_without_creating_another(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, devin, github, _ = setup_engine(tmp_path, [])
+    session = SessionCreate(
+        session_id="devin-running",
+        url="https://app.devin.ai/sessions/devin-running",
+    )
+    devin.open_issue_sessions[1] = session
+    monkeypatch.setattr(cli, "real_engine", lambda: engine)
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "once",
+            "--issue",
+            "1",
+            "--actor",
+            "maintainer",
+            "--requested-at",
+            "2026-09-08T10:01:00Z",
+            "--purpose",
+            "fix",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert devin.create_calls == 0
+    assert github.replies == [
+        {
+            "id": "1",
+            "issue": 1,
+            "body": (
+                "Existing Devin work for this issue contract is still running: "
+                f"{session.url}\n\nNo new session was created."
+            ),
+        }
+    ]
+    assert f"outcome=running session={session.url}" in result.stdout
+
+
+def test_changed_contract_and_again_allow_new_sessions(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, devin, _, item = setup_engine(tmp_path, [exit_snapshot(url)])
+
+    first = engine.run_issue(item, sleep=lambda _: None)
+    changed = item.model_copy(
+        update={
+            "body": item.body.replace("## Symptom\nFailure", "## Symptom\nNew failure"),
+            "label_at": "fix:2026-09-08T10:01:00Z",
+        }
+    )
+    second = engine.run_issue(changed, sleep=lambda _: None)
+    repeated = item.model_copy(
+        update={
+            "label_at": "fix:2026-09-08T10:02:00Z",
+            "again": True,
+        }
+    )
+    third = engine.run_issue(repeated, sleep=lambda _: None)
+
+    assert first.contract_key != second.contract_key
+    assert first.contract_key == third.contract_key
+    assert len({first.run_id, second.run_id, third.run_id}) == 3
+    assert devin.create_calls == 3
+
+
+def test_terminal_contract_requires_again_for_repeat_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, devin, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    engine.run_issue(item, sleep=lambda _: None)
+    monkeypatch.setattr(cli, "real_engine", lambda: engine)
+    command = [
+        "once",
+        "--issue",
+        "1",
+        "--actor",
+        "maintainer",
+        "--requested-at",
+        "2026-09-08T10:01:00Z",
+        "--purpose",
+        "fix",
+    ]
+
+    repeated = CliRunner().invoke(cli.app, command)
+    forced = CliRunner().invoke(cli.app, [*command, "--again"])
+
+    assert repeated.exit_code == 0
+    assert "outcome=verified session=not_created" in repeated.stdout
+    assert "already reached `verified`" in str(github.replies[0]["body"])
+    assert forced.exit_code == 0
+    assert devin.create_calls == 2
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("no_change", 0),
+        ("blocked", 0),
+        ("needs_human", 0),
+        ("check_skipped", 0),
+        ("verified", 0),
+        ("devin_error", 1),
+        ("unexpected", 1),
+    ],
+)
+def test_once_exit_code_mapping(state: str, expected: int) -> None:
+    assert cli.once_exit_code(state) == expected
 
 
 def test_ambiguous_session_creation_stays_claimed_until_timeout(tmp_path: Path) -> None:
@@ -1752,6 +1888,44 @@ def test_devin_daily_acus_sum_controller_sessions_from_fake_api_response(
     assert requests[0].url.params["created_after"] == "1799913600"
     assert requests[0].url.params.get_list("repo_names") == ["ong6/superset"]
     assert requests[0].url.params.get_list("tags") == []
+
+
+def test_devin_finds_open_session_by_issue_title(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "session_id": "other",
+                        "url": "https://app.devin.ai/sessions/other",
+                        "title": "Fix ong6/superset#12: Other issue",
+                        "status": "running",
+                        "tags": ["autopilot"],
+                    },
+                    {
+                        "session_id": "matching",
+                        "url": "https://app.devin.ai/sessions/matching",
+                        "title": "Fix ong6/superset#1: Repair fixture",
+                        "status": "running",
+                        "tags": ["autopilot"],
+                    },
+                ],
+                "has_next_page": False,
+                "end_cursor": None,
+            },
+        )
+
+    settings = Settings("devin", "org", "github", db_path=tmp_path / "autopilot.db")
+    session = DevinClient(
+        settings,
+        httpx.MockTransport(handler),
+    ).find_open_issue_session(1)
+
+    assert session == SessionCreate(
+        session_id="matching",
+        url="https://app.devin.ai/sessions/matching",
+    )
 
 
 def test_report_reconciles_acus_from_devin_sessions(tmp_path: Path) -> None:
