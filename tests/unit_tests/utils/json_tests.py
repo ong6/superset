@@ -240,6 +240,50 @@ def test_base_json_conv():
         json.base_json_conv(np.datetime64())
 
 
+@pytest.mark.parametrize("np_type", [np.float16, np.float32])
+@pytest.mark.parametrize("value", [1.5, -2.25, 0.0, 0.1])
+def test_base_json_conv_numpy_narrow_floats(np_type: type, value: float) -> None:
+    original = np_type(value)
+    converted = json.base_json_conv(original)
+    assert type(converted) is float
+    assert converted == float(original)
+
+
+@pytest.mark.parametrize("np_type", [np.float16, np.float32])
+@pytest.mark.parametrize("value", [1.5, -2.25, 0.0, 0.1])
+def test_json_dumps_numpy_narrow_floats(np_type: type, value: float) -> None:
+    original = np_type(value)
+    json_str = json.dumps({"value": original})
+    reloaded = json.loads(json_str)
+    assert isinstance(reloaded["value"], float)
+    assert reloaded["value"] == float(original)
+
+
+def test_json_dumps_numpy_narrow_floats_exact_output() -> None:
+    assert json.dumps({"value": np.float32(1.5)}) == '{"value": 1.5}'
+    assert json.dumps({"value": np.float16(1.5)}) == '{"value": 1.5}'
+    assert json.dumps({"value": np.float64(1.5)}) == '{"value": 1.5}'
+    assert json.dumps({"value": 1.5}) == '{"value": 1.5}'
+
+
+@pytest.mark.parametrize("np_type", [np.float16, np.float32])
+def test_json_dumps_numpy_narrow_floats_nan_and_inf(np_type: type) -> None:
+    assert json.dumps({"nan": np_type("nan")}) == '{"nan": null}'
+    assert json.dumps({"inf": np_type("inf")}) == '{"inf": null}'
+    assert json.dumps({"ninf": np_type("-inf")}) == '{"ninf": null}'
+
+    assert (
+        json.dumps({"nan": np_type("nan")}, allow_nan=True, ignore_nan=False)
+        == '{"nan": NaN}'
+    )
+    assert (
+        json.dumps({"inf": np_type("inf")}, allow_nan=True, ignore_nan=False)
+        == '{"inf": Infinity}'
+    )
+    with pytest.raises(ValueError, match="Out of range float values"):
+        json.dumps({"nan": np_type("nan")}, allow_nan=False, ignore_nan=False)
+
+
 def test_zlib_compression():
     json_str = '{"test": 1}'
     blob = zlib_compress(json_str)
