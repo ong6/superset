@@ -25,6 +25,10 @@ tmp_table_name_validator = validate.Regexp(
     error="tmp_table_name must contain only letters, digits, and underscores",
 )
 
+# Restricts the optional query limit to a non-negative integer. Shared by the
+# SQL Lab execute payload schemas so both request paths validate it identically.
+query_limit_validator = validate.Range(min=0)
+
 sql_lab_get_results_schema = {
     "type": "object",
     "properties": {
@@ -69,7 +73,11 @@ class ExecutePayloadSchema(Schema):
     database_id = fields.Integer(required=True)
     sql = fields.String(required=True)
     client_id = fields.String(allow_none=True)
-    queryLimit = fields.Integer(allow_none=True)  # noqa: N815
+    queryLimit = fields.Integer(  # noqa: N815
+        allow_none=True,
+        strict=True,
+        validate=query_limit_validator,
+    )
     sql_editor_id = fields.String(allow_none=True)
     catalog = fields.String(allow_none=True)
     schema = fields.String(allow_none=True)

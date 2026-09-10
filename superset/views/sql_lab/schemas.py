@@ -17,14 +17,18 @@
 
 from marshmallow import fields, Schema
 
-from superset.sqllab.schemas import tmp_table_name_validator
+from superset.sqllab.schemas import query_limit_validator, tmp_table_name_validator
 
 
 class SqlJsonPayloadSchema(Schema):
     database_id = fields.Integer(required=True)
     sql = fields.String(required=True)
     client_id = fields.String(allow_none=True)
-    queryLimit = fields.Integer(allow_none=True)  # noqa: N815
+    queryLimit = fields.Integer(  # noqa: N815
+        allow_none=True,
+        strict=True,
+        validate=query_limit_validator,
+    )
     sql_editor_id = fields.String(allow_none=True)
     schema = fields.String(allow_none=True)
     tab = fields.String(allow_none=True)
