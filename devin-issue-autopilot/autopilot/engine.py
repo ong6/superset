@@ -31,6 +31,9 @@ from pydantic import ValidationError
 from autopilot.models import (
     Issue,
     PullRequest,
+    ReportBacklogIssue,
+    ReportCoverage,
+    ReportExcludedEvidence,
     ReportIssue,
     ReportPullRequest,
     ReportRun,
@@ -77,7 +80,21 @@ class ReportDevinAdapter(Protocol):
         ...
 
 
-class GitHubAdapter(Protocol):
+class ReportGitHubAdapter(Protocol):
+    """Read-only GitHub data source used to rebuild reports."""
+
+    def report_issues(self) -> list[ReportIssue]:
+        """List labeled GitHub issues and their comments for reporting."""
+
+        ...
+
+    def report_pr(self, url: str) -> ReportPullRequest:
+        """Read the current state and creation time for a PR."""
+
+        ...
+
+
+class GitHubAdapter(ReportGitHubAdapter, Protocol):
     def list_issues(self) -> list[Issue]: ...
     def get_issue(
         self,
@@ -100,15 +117,6 @@ class GitHubAdapter(Protocol):
     def progress(self, issue: int, key: str, body: str) -> str: ...
     def conclude(self, issue: int, key: str, body: str, outcome: str) -> str: ...
     def conclude_triage(self, issue: int, key: str, body: str, labels: list[str]) -> str: ...
-    def report_issues(self) -> list[ReportIssue]:
-        """List labeled GitHub issues and their comments for reporting."""
-
-        ...
-
-    def report_pr(self, url: str) -> ReportPullRequest:
-        """Read the current state and creation time for a PR."""
-
-        ...
 
 
 class Engine:
@@ -956,25 +964,46 @@ class Engine:
 
 
 _REPORT_MARKER = re.compile(r"<!-- (devin-issue-autopilot|devin-triage-request):([0-9a-f]{16}) -->")
+_REPORT_ANY_MARKER = re.compile(r"<!-- (?:devin-issue-autopilot|devin-triage-request):[^>]+ -->")
 _REPORT_FIELD = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|$")
+_REPORT_LEGACY_OUTCOME = re.compile(r"(?mi)^\s*(?:[-*]\s*)?Outcome:\s*\S+")
+_REPORT_ACTIVE_LABELS = {"devin-fix", "devin-retry", "devin-triage"}
 
 
 def rebuild_report(
-    github: GitHubAdapter,
+    github: ReportGitHubAdapter,
     store: Store,
     devin: ReportDevinAdapter | None = None,
     path: Path = Path("reports/summary.md"),
+    repository: str = "ong6/superset",
+    revision: str = "unknown",
 ) -> str:
     """Rebuild the report from durable GitHub issue and pull-request data."""
 
     runs: list[ReportRun] = []
     bodies: dict[str, str] = {}
-    for issue in github.report_issues():
+    excluded_evidence: list[ReportExcludedEvidence] = []
+    issues = github.report_issues()
+    issues_with_runs: set[int] = set()
+    for issue in issues:
         for comment in issue.comments:
             run = _parse_report_comment(issue, comment.author, comment.body)
             if run is not None:
                 runs.append(run)
                 bodies[run.source_id] = comment.body
+                issues_with_runs.add(issue.number)
+                continue
+            reason = _excluded_report_evidence(comment.author, comment.body)
+            if reason is not None:
+                excluded_evidence.append(
+                    ReportExcludedEvidence(
+                        issue=issue.number,
+                        issue_url=issue.url,
+                        comment_url=comment.url,
+                        author=comment.author or "unknown",
+                        reason=reason,
+                    )
+                )
     if devin is not None:
         try:
             sessions = devin.list_report_sessions()
@@ -1000,7 +1029,68 @@ def rebuild_report(
             run.time_to_pr = max(0, int((created_at - started).total_seconds()))
     runs.sort(key=lambda run: (run.issue, run.kind, run.source_id))
     store.replace_report_runs(runs)
-    return write_report(runs, path)
+    coverage = ReportCoverage(
+        source="github",
+        generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        repository=repository,
+        revision=revision,
+        issues_scanned=len(issues),
+        trusted_terminal_runs=len(runs),
+        excluded_evidence=sorted(
+            excluded_evidence,
+            key=lambda evidence: (evidence.issue, evidence.comment_url or ""),
+        ),
+        backlog=sorted(
+            [
+                backlog
+                for issue in issues
+                if (backlog := _report_backlog_issue(issue, issue.number in issues_with_runs))
+                is not None
+            ],
+            key=lambda backlog: backlog.issue,
+        ),
+    )
+    return write_report(runs, path, repository, coverage)
+
+
+def _excluded_report_evidence(author: str, body: str) -> str | None:
+    """Classify terminal-looking lifecycle evidence that report metrics cannot trust."""
+
+    if _REPORT_ANY_MARKER.search(body) is None:
+        return None
+    fields = _report_fields(body)
+    table_outcome = _optional_report_value(fields.get("Outcome"))
+    if table_outcome in {None, "pending"} and _REPORT_LEGACY_OUTCOME.search(body) is None:
+        return None
+    if author != "github-actions[bot]":
+        return "untrusted author"
+    return "unsupported lifecycle format"
+
+
+def _report_backlog_issue(
+    issue: ReportIssue,
+    has_terminal_run: bool,
+) -> ReportBacklogIssue | None:
+    """Return open issue status that must remain outside run denominators."""
+
+    if issue.state != "open":
+        return None
+    labels = set(issue.labels)
+    status: Literal["active", "excluded", "not started"] | None = None
+    if "devin-exclude" in labels:
+        status = "excluded"
+    elif labels.intersection(_REPORT_ACTIVE_LABELS):
+        status = "active"
+    elif not has_terminal_run:
+        status = "not started"
+    if status is None:
+        return None
+    return ReportBacklogIssue(
+        issue=issue.number,
+        issue_url=issue.url,
+        state=status,
+        labels=sorted(labels),
+    )
 
 
 def _parse_report_comment(
@@ -1174,6 +1264,7 @@ def write_report(
     runs_or_store: list[ReportRun] | Store,
     path: Path = Path("reports/summary.md"),
     repository: str = "ong6/superset",
+    coverage: ReportCoverage | None = None,
 ) -> str:
     """Render the report and write the same Markdown returned to the caller."""
 
@@ -1206,6 +1297,15 @@ def write_report(
             ]
     else:
         runs = runs_or_store
+    if coverage is None:
+        coverage = ReportCoverage(
+            source="local",
+            generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            repository=repository,
+            revision="local",
+            issues_scanned=len(runs),
+            trusted_terminal_runs=len(runs),
+        )
     headers = [
         "issue",
         "kind",
@@ -1329,8 +1429,48 @@ def write_report(
         "|" + "|".join("---" for _ in headers) + "|",
         *["| " + " | ".join(row) + " |" for row in rows],
     ]
+    backlog_table = [
+        "| issue | status | labels |",
+        "|---|---|---|",
+        *[
+            f"| [#{item.issue}]({item.issue_url}) | {item.state} | "
+            f"{', '.join(f'`{label}`' for label in item.labels)} |"
+            for item in coverage.backlog
+        ],
+    ]
+    evidence_table = [
+        "| issue | evidence | author | exclusion |",
+        "|---|---|---|---|",
+        *[
+            (
+                f"| [#{item.issue}]({item.issue_url}) | [comment]({item.comment_url})"
+                if item.comment_url
+                else f"| [#{item.issue}]({item.issue_url}) | issue link"
+            )
+            + f" | `{item.author}` | {item.reason} |"
+            for item in coverage.excluded_evidence
+        ],
+    ]
+    repository_url = f"https://github.com/{coverage.repository}"
+    source_coverage = (
+        f"- GitHub source: {coverage.issues_scanned} Devin-labeled issues scanned; "
+        f"{coverage.trusted_terminal_runs} trusted `github-actions[bot]` terminal runs "
+        "reconstructed\n"
+        if coverage.source == "github"
+        else f"- Local source: {coverage.trusted_terminal_runs} report rows; "
+        "GitHub issue/comment coverage not scanned\n"
+    )
     markdown = (
         "# Autopilot report\n\n"
+        "## Source coverage\n\n"
+        f"- Generated: {coverage.generated_at}\n"
+        f"- Repository: [{coverage.repository}]({repository_url})\n"
+        f"- Revision: `{coverage.revision}`\n"
+        + source_coverage
+        + "- Legacy/unsupported evidence excluded: "
+        f"{len(coverage.excluded_evidence)} comments (unverified; never included in "
+        "success metrics)\n\n"
+        "## Effectiveness totals\n\n"
         + "\n".join(f"- {name}: {value}" for name, value in totals)
         + "\n\nACU telemetry is raw API data: zero is preserved, unknown is not zero, "
         "and neither establishes billing or monetary cost. The daily ACU gate only "
@@ -1338,9 +1478,29 @@ def write_report(
         "is not counted and the cache is not durable across workflow runs. Session "
         "caps remain 4/1 ACUs and 2400s/600s for remediation/triage, with one/zero "
         "nudges.\n\n"
-        "How to read this: rows preserve every available terminal GitHub Actions "
+        "## Terminal runs\n\n"
+        "How to read this: rows preserve every trusted terminal GitHub Actions "
         "comment; CI/policy verified is the controller's ready-for-review outcome, "
-        "while merged and verified-and-merged are separate measures.\n\n" + "\n".join(table) + "\n"
+        "while merged and verified-and-merged are separate measures.\n\n"
+        + "\n".join(table)
+        + "\n\n## Current issue status/backlog\n\n"
+        "These open issue rows are status context only and are excluded from attempts, "
+        "failures, success rates, timing, and usage denominators.\n\n"
+        + (
+            "\n".join(backlog_table)
+            if coverage.backlog
+            else "No active, excluded, or not-started Devin-labeled issues."
+        )
+        + "\n\n## Unverified legacy/unsupported evidence\n\n"
+        "Only terminal tables authored by `github-actions[bot]` enter metrics. "
+        "The following lifecycle-looking comments are linked for coverage visibility "
+        "but remain unverified.\n\n"
+        + (
+            "\n".join(evidence_table)
+            if coverage.excluded_evidence
+            else "No legacy or unsupported lifecycle evidence detected."
+        )
+        + "\n"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(markdown)

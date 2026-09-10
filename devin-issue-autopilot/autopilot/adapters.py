@@ -133,6 +133,7 @@ class GitHubStatuses(BaseModel):
 class GitHubComment(BaseModel):
     id: int
     body: str = ""
+    html_url: str = ""
     user: GitHubActor | None = None
 
 
@@ -417,6 +418,7 @@ class GitHubClient:
                     ReportComment(
                         author=comment.user.login if comment.user is not None else "",
                         body=comment.body,
+                        url=comment.html_url or None,
                     )
                     for comment in self._comments(data.number)
                 ]

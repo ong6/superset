@@ -151,6 +151,12 @@ with:
 GITHUB_TOKEN="$(gh auth token)" GITHUB_REPO=ong6/superset make report
 ```
 
+The exact report-only Actions dispatch is:
+
+```bash
+gh workflow run devin-issue-autopilot.yml -f mode=report
+```
+
 ## Guardrails
 
 | Guardrail | Enforcement |
@@ -181,6 +187,12 @@ and both `DEVIN_API_KEY` and `DEVIN_ORG_ID`, it also reconciles ACUs and pull
 requests from tagged v3 sessions. SQLite is a local cache rather than the
 historical source of truth.
 
+Each report identifies its generation timestamp, repository, revision, scanned
+issue count, and trusted terminal-run count. Only terminal lifecycle tables
+authored by `github-actions[bot]` enter effectiveness metrics. Marker-bearing
+human or legacy comments are linked separately as unverified exclusions rather
+than silently counted as success.
+
 The terminal and `reports/summary.md` contain the same per-run table and
 denominated totals. Rows link their issue, session, and pull request; distinguish
 triage, remediation, setup/build roles, and simulation; and separate PR-opened,
@@ -188,6 +200,10 @@ controller CI/policy-verified (ready for review), merged, and
 verified-and-merged outcomes. Every available terminal comment is retained,
 including failed attempts. Lifecycle comments updated in place by GitHub can
 expose only their latest durable body.
+
+The separate current issue-status/backlog table shows open active, excluded, and
+not-started Devin-labeled issues. Those rows are operational context only and
+never enter attempt, failure, success-rate, timing, or usage denominators.
 
 Raw ACU telemetry preserves reported zero separately from missing data. It does
 not establish billing, monetary cost, savings, or free remediation, so the
@@ -203,9 +219,10 @@ limit. Each remediation session is still created with a 4-ACU limit and a
 
 Workflow logs emit `transition issue=... run_id=... from=... to=...
 elapsed=...`, so `gh run view --log | grep transition` shows each run's state
-timeline. Manual report dispatches publish the Markdown to the workflow summary;
-the daily schedule publishes the same summary and a downloadable 30-day
-artifact without changing the repository.
+timeline. Manual report dispatches and the daily schedule publish the Markdown
+on the Actions run's **Summary** page and as the
+`devin-issue-autopilot-report` download under **Artifacts** for 30 days, without
+changing the repository.
 
 ## Scope
 

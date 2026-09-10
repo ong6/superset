@@ -108,6 +108,7 @@ class ReportComment(BaseModel):
 
     author: str
     body: str
+    url: str | None = None
 
 
 class ReportIssue(BaseModel):
@@ -118,6 +119,38 @@ class ReportIssue(BaseModel):
     state: str
     labels: list[str]
     comments: list[ReportComment]
+
+
+class ReportExcludedEvidence(BaseModel):
+    """Lifecycle-looking evidence excluded from trusted report metrics."""
+
+    issue: int
+    issue_url: str
+    comment_url: str | None = None
+    author: str
+    reason: str
+
+
+class ReportBacklogIssue(BaseModel):
+    """Current Devin-labeled issue state excluded from run metrics."""
+
+    issue: int
+    issue_url: str
+    state: Literal["active", "excluded", "not started"]
+    labels: list[str]
+
+
+class ReportCoverage(BaseModel):
+    """Source and trust-boundary context rendered with a report."""
+
+    source: Literal["github", "local"]
+    generated_at: str
+    repository: str
+    revision: str
+    issues_scanned: int
+    trusted_terminal_runs: int
+    excluded_evidence: list[ReportExcludedEvidence] = Field(default_factory=list)
+    backlog: list[ReportBacklogIssue] = Field(default_factory=list)
 
 
 class ReportSession(BaseModel):

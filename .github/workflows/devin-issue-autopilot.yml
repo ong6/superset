@@ -405,6 +405,7 @@ jobs:
         if: always()
         env:
           AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
+          AUTOPILOT_REPORT_REVISION: ${{ github.sha }}
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
           DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
           GITHUB_REPO: ${{ github.repository }}
@@ -439,6 +440,7 @@ jobs:
       - name: Publish observability report
         env:
           AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
+          AUTOPILOT_REPORT_REVISION: ${{ github.sha }}
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
           DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
           GITHUB_REPO: ${{ github.repository }}
@@ -447,6 +449,14 @@ jobs:
           cd devin-issue-autopilot
           python -m autopilot report --devin
           cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload observability report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: devin-issue-autopilot-report
+          path: devin-issue-autopilot/reports/summary.md
+          if-no-files-found: error
+          retention-days: 30
 
   daily-report:
     if: github.event_name == 'schedule'
@@ -473,6 +483,7 @@ jobs:
       - name: Rebuild observability report
         env:
           AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
+          AUTOPILOT_REPORT_REVISION: ${{ github.sha }}
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
           DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
           GITHUB_REPO: ${{ github.repository }}
