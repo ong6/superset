@@ -177,6 +177,7 @@ class ReportSession(BaseModel):
     url: str
     status: str
     tags: list[str]
+    title: str = ""
     acus_consumed: float | None = None
     pull_requests: list[SessionPullRequest] = Field(default_factory=list)
 
@@ -262,6 +263,8 @@ class Run(BaseModel):
     target_branch: str | None = None
     target_sha: str | None = None
     summary: str = ""
+    acu_guard_source: str = ""
+    acu_guard_total: float = 0
 
     @property
     def issue_model(self) -> Issue:

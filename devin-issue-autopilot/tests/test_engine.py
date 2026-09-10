@@ -156,6 +156,46 @@ def test_open_pr_with_passing_check_is_verified(tmp_path: Path) -> None:
     assert "1 passed" in body
 
 
+def test_daily_acu_cap_blocks_from_devin_api_usage(tmp_path: Path) -> None:
+    clock = Clock()
+    engine, devin, github, item = setup_engine(
+        tmp_path,
+        [exit_snapshot("https://github.com/ong6/superset/pull/10")],
+        clock=clock,
+    )
+    devin.acu_total = 20
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "blocked"
+    assert devin.create_calls == 0
+    assert devin.acus_since_calls == [clock.value - 24 * 60 * 60]
+    assert "Devin API: 20/20 ACUs in the last 24 hours" in str(github.comments[0]["body"])
+
+
+def test_daily_acu_cap_uses_local_fallback_when_api_fails(tmp_path: Path) -> None:
+    clock = Clock()
+    engine, devin, github, item = setup_engine(
+        tmp_path,
+        [exit_snapshot("https://github.com/ong6/superset/pull/10")],
+        clock=clock,
+    )
+    previous = engine.store.claim(issue(2), now=clock.value - 60)
+    engine.store.update(previous.run_id, acus=20, acus_reported=True)
+    devin.acu_error = httpx.ConnectError(
+        "connection dropped",
+        request=httpx.Request("GET", "https://api.devin.ai/v3/sessions"),
+    )
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "blocked"
+    assert devin.create_calls == 0
+    assert "local SQLite fallback (Devin API query failed): 20/20 ACUs in the last 24 hours" in str(
+        github.comments[0]["body"]
+    )
+
+
 def test_merged_pr_with_passing_check_is_verified_and_merged(tmp_path: Path) -> None:
     url = "https://github.com/ong6/superset/pull/10"
     engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
@@ -1650,6 +1690,68 @@ def test_devin_report_sessions_paginate_by_autopilot_tag(tmp_path: Path) -> None
     assert requests[0].url.params.get_list("tags") == ["autopilot"]
     assert requests[0].url.params.get_list("repo_names") == ["ong6/superset"]
     assert requests[1].url.params["after"] == "next"
+
+
+def test_devin_daily_acus_sum_controller_sessions_from_fake_api_response(
+    tmp_path: Path,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "session_id": "tagged",
+                        "url": "https://app.devin.ai/sessions/tagged",
+                        "status": "exit",
+                        "title": "Legacy controller session",
+                        "created_at": 1_799_999_000,
+                        "tags": ["autopilot", "role:remediation"],
+                        "acus_consumed": 1.5,
+                    },
+                    {
+                        "session_id": "fix-title",
+                        "url": "https://app.devin.ai/sessions/fix-title",
+                        "status": "exit",
+                        "title": "Fix ong6/superset#1: Repair fixture",
+                        "created_at": 1_799_999_100,
+                        "tags": [],
+                        "acus_consumed": 2.25,
+                    },
+                    {
+                        "session_id": "triage-title",
+                        "url": "https://app.devin.ai/sessions/triage-title",
+                        "status": "exit",
+                        "title": "Triage ong6/superset#2: Classify fixture",
+                        "created_at": 1_799_999_200,
+                        "tags": [],
+                        "acus_consumed": 0.25,
+                    },
+                    {
+                        "session_id": "unrelated",
+                        "url": "https://app.devin.ai/sessions/unrelated",
+                        "status": "exit",
+                        "title": "Manual session",
+                        "created_at": 1_799_999_300,
+                        "tags": ["manual"],
+                        "acus_consumed": 99,
+                    },
+                ],
+                "has_next_page": False,
+                "end_cursor": None,
+            },
+        )
+
+    settings = Settings("devin", "org", "github", db_path=tmp_path / "autopilot.db")
+    total = DevinClient(settings, httpx.MockTransport(handler)).acus_since(1_799_913_600)
+
+    assert total == 4
+    assert requests[0].url.params["created_after"] == "1799913600"
+    assert requests[0].url.params.get_list("repo_names") == ["ong6/superset"]
+    assert requests[0].url.params.get_list("tags") == []
 
 
 def test_report_reconciles_acus_from_devin_sessions(tmp_path: Path) -> None:

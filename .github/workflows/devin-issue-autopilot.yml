@@ -313,11 +313,22 @@ jobs:
         if: always()
         run: python -m pip install ./devin-issue-autopilot
 
+      - name: Restore controller state
+        if: steps.claim.outputs.claimed == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .autopilot-state/devin-issue-autopilot.db
+          key: >-
+            autopilot-db-${{ github.repository }}-${{ github.run_id }}-${{
+            github.run_attempt }}
+          restore-keys: |
+            autopilot-db-${{ github.repository }}-
+
       - name: Run bounded issue automation
         if: steps.claim.outputs.claimed == 'true'
         env:
           AUTOPILOT_DAILY_ACU_CAP: "20"
-          AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot.db
+          AUTOPILOT_DB: ${{ github.workspace }}/.autopilot-state/devin-issue-autopilot.db
           AUTOPILOT_MODE: ${{ steps.claim.outputs.mode }}
           AUTOPILOT_PURPOSE: ${{ steps.claim.outputs.purpose }}
           AUTOPILOT_REQUEST_ACTOR: ${{ steps.claim.outputs.actor }}
@@ -328,6 +339,7 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          mkdir -p "$(dirname "$AUTOPILOT_DB")"
           if [ "$AUTOPILOT_MODE" = "triage" ]; then
             python -m autopilot triage \
               --issue "$ISSUE_NUMBER" \
@@ -340,6 +352,15 @@ jobs:
               --requested-at "$AUTOPILOT_REQUEST_AT" \
               --purpose "$AUTOPILOT_PURPOSE"
           fi
+
+      - name: Save controller state
+        if: always() && steps.claim.outputs.claimed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .autopilot-state/devin-issue-autopilot.db
+          key: >-
+            autopilot-db-${{ github.repository }}-${{ github.run_id }}-${{
+            github.run_attempt }}
 
       - name: Release issue claim
         if: always() && steps.claim.outputs.claimed == 'true'
