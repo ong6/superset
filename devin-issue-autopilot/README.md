@@ -140,7 +140,8 @@ issue contract takes precedence.
 | `python -m autopilot triage --issue N` | Classify one issue and post a triage brief |
 | `python -m autopilot once --issue N` | Run one issue to a terminal outcome |
 | `python -m autopilot report` | Rebuild GitHub-backed history, print it, and write `reports/summary.md` |
-| `python -m autopilot report --devin` | Also reconcile ACUs and pull requests from tagged Devin v3 sessions when Devin credentials are set |
+| `python -m autopilot report --devin` | Also reconcile pull requests and internal session diagnostics from tagged Devin v3 sessions when Devin credentials are set |
+| `python -m autopilot report --include-raw-usage` | Opt into a raw/unverified usage diagnostics table; default reports omit it |
 | `python -m autopilot simulate` | Run credential-free fake fixtures |
 
 From this directory, `make simulate` is the documented credential-free
@@ -183,9 +184,8 @@ gh workflow run devin-issue-autopilot.yml --repo ong6/superset -f mode=report
 `report` paginates issues carrying any `devin-*` label, reconstructs terminal
 triage and remediation runs from GitHub Actions comments, and reads current pull
 request state. `GITHUB_TOKEN` is the only required credential. With `--devin`
-and both `DEVIN_API_KEY` and `DEVIN_ORG_ID`, it also reconciles ACUs and pull
-requests from tagged v3 sessions. SQLite is a local cache rather than the
-historical source of truth.
+and both `DEVIN_API_KEY` and `DEVIN_ORG_ID`, it also reconciles tagged v3
+sessions. SQLite is a local cache rather than the historical source of truth.
 
 Each report identifies its generation timestamp, repository, revision, scanned
 issue count, and trusted terminal-run count. Only terminal lifecycle tables
@@ -201,23 +201,26 @@ verified-and-merged outcomes. Every available terminal comment is retained,
 including failed attempts. Lifecycle comments updated in place by GitHub can
 expose only their latest durable body.
 
-The separate current issue-status/backlog table shows every open Devin-labeled
-issue with its label-derived state and next action, including triaging/running,
-queued requests, ready for approval/review, missing information, maintainer
-attention, and paused work. Those rows are operational context only and
-never enter attempt, failure, success-rate, timing, or usage denominators.
+The separate current issue-status/backlog table gives a next action for every
+open Devin-labeled issue. Exclusion has highest precedence, followed by
+running/triaging, needs-info, needs-human, verified, candidate, queued, and
+not-started states. Those rows are operational context only and never enter
+attempt, failure, success-rate, timing, or usage denominators. Labels are a
+snapshot, not proof of live session health. Removing `devin-exclude` alone does
+not emit a matching workflow event; add `devin-triage` to request processing.
 
-Usage figures are omitted from default reports and new lifecycle comments
-because a reliable usage source has not been verified. Raw values are retained
-internally for diagnostics. To inspect them explicitly, use
-`python -m autopilot report --devin --include-raw-usage`; this output is marked
-unverified, preserves zero separately from missing values, and must not be used
-to claim free work or savings. Existing historical comments are not rewritten.
+Default reports, workflow summaries, artifacts, and new lifecycle comments omit
+raw usage. `--include-raw-usage` adds a separate raw/unverified diagnostics
+table for debugging; it preserves missing values as `unknown` and numeric zero
+without interpreting either as billing, cost, savings, or free work. Existing
+historical comments are not rewritten.
 
-The runtime still applies its configured per-session limits. The local daily
-usage gate depends on available telemetry and a disposable runner cache; it is
-not durable organization-wide spend enforcement. These technical controls do
-not establish actual usage or cost.
+The `AUTOPILOT_DAILY_ACU_CAP` gate sums only reported usage in the current local
+SQLite cache; missing telemetry is not counted, and workflow runners use an
+ephemeral database, so it is not a durable cross-run or organization billing
+limit. Each remediation session is still created with a 4-ACU limit and a
+2400-second controller timeout with at most one nudge; triage uses
+`AUTOPILOT_TRIAGE_ACU_LIMIT` (default 1), a 600-second timeout, and no nudges.
 
 Workflow logs emit `transition issue=... run_id=... from=... to=...
 elapsed=...`, so `gh run view --log | grep transition` shows each run's state

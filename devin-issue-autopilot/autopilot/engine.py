@@ -32,6 +32,7 @@ from autopilot.models import (
     Issue,
     PullRequest,
     ReportBacklogIssue,
+    ReportBacklogState,
     ReportCoverage,
     ReportExcludedEvidence,
     ReportIssue,
@@ -981,14 +982,14 @@ def rebuild_report(
     bodies: dict[str, str] = {}
     excluded_evidence: list[ReportExcludedEvidence] = []
     issues = github.report_issues()
-    issues_with_runs: set[int] = set()
+    outcomes_by_issue: dict[int, set[str]] = {}
     for issue in issues:
         for comment in issue.comments:
             run = _parse_report_comment(issue, comment.author, comment.body)
             if run is not None:
                 runs.append(run)
                 bodies[run.source_id] = comment.body
-                issues_with_runs.add(issue.number)
+                outcomes_by_issue.setdefault(issue.number, set()).add(run.outcome)
                 continue
             reason = _excluded_report_evidence(comment.author, comment.body)
             if reason is not None:
@@ -1041,13 +1042,24 @@ def rebuild_report(
             [
                 backlog
                 for issue in issues
-                if (backlog := _report_backlog_issue(issue, issue.number in issues_with_runs))
+                if (
+                    backlog := _report_backlog_issue(
+                        issue,
+                        outcomes_by_issue.get(issue.number, set()),
+                    )
+                )
                 is not None
             ],
             key=lambda backlog: backlog.issue,
         ),
     )
-    return write_report(runs, path, repository, coverage, include_raw_usage)
+    return write_report(
+        runs,
+        path,
+        repository,
+        coverage,
+        include_raw_usage=include_raw_usage,
+    )
 
 
 def _excluded_report_evidence(author: str, body: str) -> str | None:
@@ -1066,64 +1078,57 @@ def _excluded_report_evidence(author: str, body: str) -> str | None:
 
 def _report_backlog_issue(
     issue: ReportIssue,
-    has_terminal_run: bool,
+    trusted_outcomes: set[str],
 ) -> ReportBacklogIssue | None:
     """Return open issue status that must remain outside run denominators."""
 
     if issue.state != "open":
         return None
     labels = set(issue.labels)
-    states = [
-        ("devin-exclude", "excluded", "Paused; remove exclusion and request triage when ready."),
-        (
-            "devin-running",
-            "running",
-            "Follow the session link on the issue; review its latest progress.",
-        ),
-        (
-            "devin-triaging",
-            "triaging",
-            "Wait for the readiness brief; follow the issue session link.",
-        ),
-        ("devin-fix", "queued", "Repair requested; check the issue's workflow link."),
-        ("devin-retry", "queued", "Retry requested; check the issue's workflow link."),
-        ("devin-triage", "queued", "Triage requested; check the issue's workflow link."),
-        (
-            "devin-needs-info",
-            "needs information",
-            "Add the requested details, then add devin-triage.",
-        ),
-        (
-            "devin-needs-maintainer",
-            "needs maintainer",
-            "Resolve the readiness brief's maintainer decision.",
-        ),
-        ("devin-needs-human", "needs attention", "Inspect the failure before authorizing a retry."),
-        (
-            "devin-verified",
-            "ready for review",
-            "Review the linked PR and current CI before merging.",
-        ),
-        (
-            "devin-candidate",
-            "ready for approval",
-            "Review the contract; comment /devin fix to approve.",
-        ),
-        ("devin-triaged", "triaged", "Read the readiness brief and its next action."),
-    ]
-    state, next_action = (
-        ("status unavailable", "Inspect the latest issue comment before starting more work.")
-        if has_terminal_run
-        else ("not started", "Add devin-triage to request a readiness brief.")
-    )
-    for label, candidate_state, action in states:
-        if label in labels:
-            state, next_action = candidate_state, action
-            break
+    status: ReportBacklogState
+    if "devin-exclude" in labels:
+        status = "excluded"
+        next_action = (
+            "Remove `devin-exclude`, then add `devin-triage`; removing exclusion "
+            "alone does not trigger processing."
+        )
+    elif "devin-running" in labels:
+        status = "running"
+        next_action = (
+            "Wait for workflow completion; this label is a snapshot, not proof "
+            "of live session health."
+        )
+    elif "devin-triaging" in labels:
+        status = "triaging"
+        next_action = (
+            "Wait for workflow completion; this label is a snapshot, not proof "
+            "of live session health."
+        )
+    elif "devin-needs-info" in labels:
+        status = "needs information"
+        next_action = "Add the requested information, then add `devin-triage`."
+    elif labels.intersection({"devin-needs-maintainer", "devin-needs-human"}):
+        status = "needs maintainer/human"
+        next_action = "Maintainer review or a manual decision is required before retriggering."
+    elif "devin-verified" in labels or "verified" in trusted_outcomes:
+        status = "verified ready for review"
+        next_action = "Review the issue's linked pull request and merge when approved."
+    elif "devin-candidate" in labels:
+        status = "ready for approval"
+        next_action = "A maintainer may comment `/devin fix` or add `devin-fix`."
+    elif labels.intersection({"devin-fix", "devin-retry", "devin-triage"}):
+        status = "queued"
+        next_action = (
+            "Wait for the matching label event to be claimed; inspect issue comments "
+            "if it remains queued."
+        )
+    else:
+        status = "not started"
+        next_action = "Add `devin-triage` to request a new readiness brief."
     return ReportBacklogIssue(
         issue=issue.number,
         issue_url=issue.url,
-        state=state,
+        state=status,
         labels=sorted(labels),
         next_action=next_action,
     )
@@ -1347,7 +1352,6 @@ def write_report(
         "PR",
         "CI",
         "outcome",
-        "ACUs",
         "elapsed",
         "nudges",
     ]
@@ -1368,7 +1372,6 @@ def write_report(
             ),
             run.ci or "-",
             run.outcome,
-            f"{run.acus:.2f}" if run.acus is not None else "unknown",
             f"{run.elapsed}s",
             str(run.nudges),
         ]
@@ -1388,18 +1391,6 @@ def write_report(
         run.outcome == "verified" and run.pr_state == "merged" for run in fix_runs
     )
     pr_times = [run.time_to_pr for run in fix_runs if run.time_to_pr is not None]
-    reported_acus = [run.acus for run in runs if run.acus is not None]
-    acus_total = sum(reported_acus)
-    zero_acus = sum(acu == 0 for acu in reported_acus)
-    reported_live_repair_acus = [run.acus for run in fix_runs if run.acus is not None]
-    live_repair_acus_total = sum(reported_live_repair_acus)
-    live_repair_ratio = (
-        f"{live_repair_acus_total / controller_verified:.2f} raw "
-        f"({len(reported_live_repair_acus)}/{fix_attempted} live repairs reported; "
-        "not billing/cost)"
-        if controller_verified and len(reported_live_repair_acus) == fix_attempted
-        else "n/a (complete raw live-repair telemetry and a CI/policy-verified PR are required)"
-    )
     totals: list[tuple[str, str | int]] = [
         ("Triaged", f"{sum(run.state == 'triaged' for run in runs)}/{run_count} runs"),
         ("Fix attempted", f"{fix_attempted}/{run_count} runs"),
@@ -1443,36 +1434,41 @@ def write_report(
             else f"n/a (0/{pr_opened} PRs timed)",
         ),
         (
-            "ACUs total",
-            f"{acus_total:.2f} raw across {len(reported_acus)}/{run_count} runs",
-        ),
-        ("Reported zero ACUs", f"{zero_acus}/{len(reported_acus)} reported runs"),
-        ("Live repair ACUs per CI/policy-verified PR", live_repair_ratio),
-        (
             "Verified rate",
             f"{controller_verified}/{fix_attempted} ({controller_verified / fix_attempted:.1%})"
             if fix_attempted
             else "n/a (0 fix attempts)",
         ),
     ]
-    if not include_raw_usage:
-        usage_column = headers.index("ACUs")
-        headers.pop(usage_column)
-        for row in rows:
-            row.pop(usage_column)
-        totals = [(name, value) for name, value in totals if "ACU" not in name]
-    usage_note = (
-        "\n\nRaw usage diagnostics (unverified): values are API telemetry, not verified "
-        "billing or cost. Zero is preserved; missing values remain unknown. "
-        "Do not use these figures for customer savings claims.\n\n"
-        if include_raw_usage
-        else "\n\nUsage figures are omitted because a reliable usage source has not been verified.\n\n"
-    )
     table = [
         "| " + " | ".join(headers) + " |",
         "|" + "|".join("---" for _ in headers) + "|",
         *["| " + " | ".join(row) + " |" for row in rows],
     ]
+    if include_raw_usage:
+        usage_headers = ["issue", "kind", "session", "raw API ACUs"]
+        usage_rows = [
+            [
+                f"[#{run.issue}]({run.issue_url})",
+                run.kind,
+                f"[session]({run.session_url})" if run.session_url else "-",
+                f"{run.acus:.2f}" if run.acus is not None else "unknown",
+            ]
+            for run in runs
+        ]
+        usage_table = [
+            "| " + " | ".join(usage_headers) + " |",
+            "|" + "|".join("---" for _ in usage_headers) + "|",
+            *["| " + " | ".join(row) + " |" for row in usage_rows],
+        ]
+        usage_section = (
+            "\n\n## Raw usage diagnostics (unverified)\n\n"
+            "Opt-in raw API values for debugging only. `unknown` means no value was "
+            "reported; numeric zero is preserved. These values do not establish "
+            "billing, cost, savings, or free work.\n\n" + "\n".join(usage_table)
+        )
+    else:
+        usage_section = ""
     backlog_table = [
         "| issue | status | next action | labels |",
         "|---|---|---|---|",
@@ -1516,8 +1512,9 @@ def write_report(
         "success metrics)\n\n"
         "## Effectiveness totals\n\n"
         + "\n".join(f"- {name}: {value}" for name, value in totals)
-        + usage_note
-        + "## Terminal runs\n\n"
+        + usage_section
+        + "\n\n"
+        "## Terminal runs\n\n"
         "How to read this: rows preserve every trusted terminal GitHub Actions "
         "comment; CI/policy verified is the controller's ready-for-review outcome, "
         "while merged and verified-and-merged are separate measures.\n\n"
