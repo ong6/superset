@@ -29,8 +29,8 @@ from superset.utils.report_execution import (
 )
 
 
-def _report_config(**overrides: int) -> dict[str, int | bool]:
-    config: dict[str, int | bool] = {
+def _report_config(**overrides: float) -> dict[str, float | bool]:
+    config: dict[str, float | bool] = {
         "ALERT_REPORTS_WORKING_TIME_OUT_KILL": True,
         "ALERT_REPORTS_EXECUTION_BUDGET_SECONDS": 900,
         "ALERT_REPORTS_EXECUTION_CAPTURE_RESERVE_SECONDS": 60,
@@ -203,6 +203,38 @@ def test_report_execution_config_rejects_invalid_startup_values(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         validate_report_execution_config(_report_config(**overrides))
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "ALERT_REPORTS_EXECUTION_BUDGET_SECONDS",
+        "ALERT_REPORTS_EXECUTION_CAPTURE_RESERVE_SECONDS",
+        "ALERT_REPORTS_EXECUTION_DELIVERY_RESERVE_SECONDS",
+        "ALERT_REPORTS_EXECUTION_CLEANUP_RESERVE_SECONDS",
+        "ALERT_REPORTS_EXECUTION_HARD_TIMEOUT_GRACE_SECONDS",
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), float("-inf")],
+    ids=["nan", "inf", "-inf"],
+)
+def test_report_execution_config_rejects_non_finite_values(
+    key: str,
+    value: float,
+) -> None:
+    config = _report_config()
+    config[key] = value
+
+    with pytest.raises(ValueError, match=f"{key} must be a finite number"):
+        validate_report_execution_config(config)
+    with pytest.raises(ValueError, match="must be a finite number"):
+        get_report_task_timeout_options(
+            is_report=True,
+            working_timeout=None,
+            config=config,
+        )
 
 
 def test_report_execution_config_accepts_defaults() -> None:
