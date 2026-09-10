@@ -198,6 +198,7 @@ class Store:
     def live(self) -> list[Run]:
         terminal = (
             "verified",
+            "check_skipped",
             "ci_failed",
             "policy_rejected",
             "no_pr",

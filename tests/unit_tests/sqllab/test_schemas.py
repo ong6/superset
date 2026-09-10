@@ -14,6 +14,39 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import pytest
+from marshmallow import Schema, ValidationError
+
+
+def _execute_payload_schemas() -> list[Schema]:
+    from superset.sqllab.schemas import ExecutePayloadSchema
+    from superset.views.sql_lab.schemas import SqlJsonPayloadSchema
+
+    return [ExecutePayloadSchema(), SqlJsonPayloadSchema()]
+
+
+def _payload(query_limit: object) -> dict[str, object]:
+    return {"database_id": 1, "sql": "SELECT 1", "queryLimit": query_limit}
+
+
+@pytest.mark.parametrize("query_limit", [-1, -100, 1.5, 0.5])
+def test_execute_schemas_reject_invalid_query_limit(query_limit: float) -> None:
+    """
+    Negative and fractional `queryLimit` values must fail validation instead of
+    being coerced to 0 or forwarded as a float row limit.
+    """
+    for schema in _execute_payload_schemas():
+        with pytest.raises(ValidationError):
+            schema.load(_payload(query_limit))
+
+
+@pytest.mark.parametrize("query_limit", [0, 1, 1000, None])
+def test_execute_schemas_accept_valid_query_limit(query_limit: float) -> None:
+    for schema in _execute_payload_schemas():
+        result = schema.load(_payload(query_limit))
+        assert result["queryLimit"] == query_limit
+
+
 def test_sqllab_bootstrap_database_schema_includes_engine_information() -> None:
     """
     The OpenAPI contract for `GET /api/v1/sqllab/` documents `engine_information`

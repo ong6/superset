@@ -117,6 +117,7 @@ class GitHubCheck(BaseModel):
     name: str
     status: str
     conclusion: str | None = None
+    started_at: str | None = None
 
 
 class GitHubChecks(BaseModel):
@@ -545,16 +546,34 @@ class GitHubClient:
                 break
         return files
 
+    def _check_runs(self, sha: str, name: str | None = None) -> list[GitHubCheck]:
+        """Read every page of check runs for a commit."""
+
+        url = f"/repos/{self.repo}/commits/{sha}/check-runs"
+        params: dict[str, str | int] = {"per_page": 100}
+        if name is not None:
+            params["check_name"] = name
+        request_params: dict[str, str | int] | None = params
+        checks: list[GitHubCheck] = []
+        while True:
+            response = self.client.get(url, params=request_params)
+            response.raise_for_status()
+            checks.extend(GitHubChecks.model_validate(response.json()).check_runs)
+            next_page = response.links.get("next")
+            if next_page is None:
+                return checks
+            url = next_page["url"]
+            request_params = None
+
     def check(self, sha: str, name: str) -> tuple[str, str | None]:
-        response = self.client.get(
-            f"/repos/{self.repo}/commits/{sha}/check-runs",
-            params={"per_page": 100},
-        )
-        response.raise_for_status()
-        checks = GitHubChecks.model_validate(response.json())
-        for check in checks.check_runs:
-            if check.name.casefold() == name.casefold():
-                return check.status, check.conclusion
+        matches = [
+            check
+            for check in self._check_runs(sha, name)
+            if check.name.casefold() == name.casefold()
+        ]
+        if matches:
+            latest = max(matches, key=lambda check: check.started_at or "")
+            return latest.status, latest.conclusion
         response = self.client.get(
             f"/repos/{self.repo}/commits/{sha}/status",
             params={"per_page": 100},
@@ -566,6 +585,13 @@ class GitHubClient:
                 if status.state == "pending":
                     return "in_progress", None
                 return "completed", status.state
+        all_checks = self._check_runs(sha)
+        if (
+            (all_checks or statuses.statuses)
+            and all(check.status == "completed" for check in all_checks)
+            and all(status.state != "pending" for status in statuses.statuses)
+        ):
+            return "completed", "skipped"
         return "queued", None
 
     @staticmethod

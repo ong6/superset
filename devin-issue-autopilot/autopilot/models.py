@@ -141,6 +141,8 @@ ReportBacklogState = Literal[
     "needs information",
     "needs maintainer/human",
     "verified ready for review",
+    "triaged",
+    "status unavailable",
     "not started",
 ]
 

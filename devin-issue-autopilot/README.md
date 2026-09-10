@@ -40,12 +40,27 @@ make report
 The Compose service polls every 30 seconds. `once` exits non-zero unless the
 issue reaches `verified`.
 
-For a credential-free local check:
+## Reviewer path, tested on 2026-09-10
 
-```bash
-make simulate
-make test
-```
+This path was run from a fresh checkout of `ong6/superset` `master`
+(`0497f871fe`). Required/verified tools: Docker Engine `29.7.2` and Docker
+Compose `v5.4.0`. Run from `devin-issue-autopilot/`; wall times vary by machine
+and network.
+
+| Step | Command | Expected output excerpt | Wall time |
+|---|---|---|---|
+| Build | `docker compose build` | `Image devin-issue-autopilot-watch Built` | 15.50s |
+| Tests | `make test` | `50 passed in 0.56s` | 1.78s |
+| Simulation and report | `make simulate` | `1: verified` … `3: verified`; `# Autopilot report`; `Simulated: 3/3 runs` | 1.14s |
+
+No GitHub or Devin credentials were present for the simulation. `make simulate`
+runs in Docker and finishes by rendering the simulated report to the terminal
+and `reports/summary.md`. The standalone live `make report` is GitHub-backed
+and exits with `GITHUB_TOKEN is required` when run without that credential.
+
+The Compose service is named `watch`; use `make test` verbatim. The stale
+command `docker compose run --rm autopilot make test` fails with
+`no such service: autopilot` and is not part of the reviewer path.
 
 ## Workflow
 
@@ -81,21 +96,14 @@ for actions, and is rejected if it opens a pull request. The workflow serializes
 work per issue, updates one durable lifecycle comment, and uses terminal request
 markers to prevent duplicate sessions.
 
-## Reviewer walkthrough
+## How would an engineering leader know this is working?
 
-Copy a body from [`issues/`](issues/) into a new issue without `devin-exclude`.
-Confirm that triage posts a brief, then authorize remediation with `/devin fix`
-or `devin-fix`. Follow the session and pull request links in the issue and run
-`make report` to inspect the recorded result.
-
-## Live evidence
-
-| Issue | Session | PR | CI result | Outcome |
-|---|---|---|---|---|
-| [#13](https://github.com/ong6/superset/issues/13) | [4ece9ef5](https://app.devin.ai/sessions/4ece9ef53c7d4d5bbcba6613daa166dd) | [#14](https://github.com/ong6/superset/pull/14) | Passed | Verified |
-|  |  |  |  |  |
-|  |  |  |  |  |
-|  |  |  |  |  |
+The issue labels expose the queue and outcome: `devin-triaging` and
+`devin-running` show active work, `devin-candidate` is ready for approval,
+`devin-verified` is ready for review, and `devin-needs-human` needs intervention.
+The `devin-issue-autopilot-report` artifact shows the three decision totals:
+**Fix attempted**, **CI/policy verified**, and **Merged**. See the
+[latest successful report-only Actions run](https://github.com/ong6/superset/actions/runs/34448848049).
 
 ## Controls
 
@@ -112,26 +120,9 @@ or `devin-fix`. Follow the session and pull request links in the issue and run
 | `/devin fix` or `devin-fix` | Authorized maintainer starts bounded remediation |
 | `/devin retry` or `devin-retry` | Authorized maintainer starts a new bounded remediation attempt |
 
-A newly opened issue moves from active triage into the approval queue once its
-readiness brief succeeds: `devin-triaging` marks the active run, and
-`devin-candidate` marks the issue `Ready for approval`.
-
-```python
->>> STATUS_BY_LABEL = {
-...     "devin-triaging": "Triaging",
-...     "devin-candidate": "Ready for approval",
-... }
->>> def issue_status(labels):
-...     for label in labels:
-...         if label in STATUS_BY_LABEL:
-...             return STATUS_BY_LABEL[label]
-...     return "Untriaged"
->>> issue_status(["devin-triaging"])
-'Triaging'
->>> issue_status(["devin-triaged", "devin-candidate"])
-'Ready for approval'
-
-```
+A newly opened issue moves from `devin-triaging` to `devin-candidate` when its
+readiness brief succeeds. The detailed demo sequence and evidence gates are in
+[`DEMO_RUNBOOK.md`](DEMO_RUNBOOK.md).
 
 ## Issue contract
 
@@ -202,53 +193,20 @@ gh workflow run devin-issue-autopilot.yml --repo ong6/superset -f mode=report
 
 ## Observability
 
-`report` paginates issues carrying any `devin-*` label, reconstructs terminal
-triage and remediation runs from GitHub Actions comments, and reads current pull
-request state. `GITHUB_TOKEN` is the only required credential. With `--devin`
-and both `DEVIN_API_KEY` and `DEVIN_ORG_ID`, it also reconciles tagged v3
-sessions. SQLite is a local cache rather than the historical source of truth.
+`report` rebuilds history from `devin-*` issues, trusted terminal comments
+authored by `github-actions[bot]`, and current pull-request state. SQLite is only
+a reconstructed cache. `GITHUB_TOKEN` is required; `--devin` optionally adds
+tagged-session diagnostics when Devin credentials are also set.
 
-Each report identifies its generation timestamp, repository, revision, scanned
-issue count, and trusted terminal-run count. Only terminal lifecycle tables
-authored by `github-actions[bot]` enter effectiveness metrics. Marker-bearing
-human or legacy comments are linked separately as unverified exclusions rather
-than silently counted as success.
+The terminal, `reports/summary.md`, Actions Summary, and
+`devin-issue-autopilot-report` artifact contain the same linked run table and
+denominated totals. Backlog labels are operational context, not success
+evidence. Raw usage is omitted unless `--include-raw-usage` is requested and is
+never interpreted as billing or savings.
 
-The terminal and `reports/summary.md` contain the same per-run table and
-denominated totals. Rows link their issue, session, and pull request; distinguish
-triage, remediation, setup/build roles, and simulation; and separate PR-opened,
-controller CI/policy-verified (ready for review), merged, and
-verified-and-merged outcomes. Every available terminal comment is retained,
-including failed attempts. Lifecycle comments updated in place by GitHub can
-expose only their latest durable body.
-
-The separate current issue-status/backlog table gives a next action for every
-open Devin-labeled issue. Exclusion has highest precedence, followed by
-running/triaging, needs-info, needs-human, verified, candidate, queued, and
-not-started states. Those rows are operational context only and never enter
-attempt, failure, success-rate, timing, or usage denominators. Labels are a
-snapshot, not proof of live session health. Removing `devin-exclude` alone does
-not emit a matching workflow event; add `devin-triage` to request processing.
-
-Default reports, workflow summaries, artifacts, and new lifecycle comments omit
-raw usage. `--include-raw-usage` adds a separate raw/unverified diagnostics
-table for debugging; it preserves missing values as `unknown` and numeric zero
-without interpreting either as billing, cost, savings, or free work. Existing
-historical comments are not rewritten.
-
-The `AUTOPILOT_DAILY_ACU_CAP` gate sums only reported usage in the current local
-SQLite cache; missing telemetry is not counted, and workflow runners use an
-ephemeral database, so it is not a durable cross-run or organization billing
-limit. Each remediation session is still created with a 4-ACU limit and a
-2400-second controller timeout with at most one nudge; triage uses
-`AUTOPILOT_TRIAGE_ACU_LIMIT` (default 1), a 600-second timeout, and no nudges.
-
-Workflow logs emit `transition issue=... run_id=... from=... to=...
-elapsed=...`, so `gh run view --log | grep transition` shows each run's state
-timeline. Manual report dispatches and the daily schedule publish the Markdown
-on the Actions run's **Summary** page and as the
-`devin-issue-autopilot-report` download under **Artifacts** for 30 days, without
-changing the repository.
+Logs emit `transition issue=... run_id=... from=... to=... elapsed=...`.
+Report-only dispatches and the daily schedule publish Markdown without changing
+the repository; artifacts are retained for 30 days.
 
 ## Scope
 
@@ -256,21 +214,6 @@ This is a one-repository pilot. It does not merge pull requests, bypass branch
 protection, run on excluded issues, provide a shared queue, or verify patches in
 a separate clean-room publisher.
 
-## Maintainer and demo flow
-
-Use the [repository status links](../README.md#devin-workflow-current-issue-status)
-for day-to-day work. New/reopened issues start triage unless excluded. Adding
-`devin-triage` requests a fresh brief after clarification. A maintainer authorizes
-a repair with `/devin fix` or `devin-fix`; `/devin retry` requests another attempt.
-No manual Actions dispatch is needed for those normal events.
-
-Reports refresh after issue processing and daily at 06:17 UTC (14:17 Singapore
-time). Manual `mode=report` refresh is optional and read-only. Schedules can be
-delayed; always show the generation timestamp. PR merge state is refreshed by
-the next report, not continuously.
-
-For the prepared #48/#49 demo issues, keep `devin-exclude` until deliberately
-starting. Then remove it and add `devin-triage`, review the issue's brief, and
-approve with `/devin fix`. Removing exclusion alone is not a trigger. In the
-five-minute recording, show a completed issue/session/PR/check chain rather
-than waiting for a full repair. Keep genuine failures and pending work visible.
+Day-to-day status links are in the [fork README](../README.md#devin-workflow-current-issue-status);
+the longer maintainer and recording procedure is in
+[`DEMO_RUNBOOK.md`](DEMO_RUNBOOK.md).

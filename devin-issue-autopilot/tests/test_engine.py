@@ -25,7 +25,7 @@ import httpx
 import pytest
 
 from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
-from autopilot.engine import Engine, rebuild_report, write_report
+from autopilot.engine import Engine, _report_backlog_issue, rebuild_report, write_report
 from autopilot.models import (
     Issue,
     ReportComment,
@@ -218,6 +218,21 @@ def test_acceptance_output_cannot_break_the_terminal_code_fence(tmp_path: Path) 
     body = str(github.comments[0]["body"])
     assert "``\u200b`" in body
     assert "@\u200bmaintainer" in body
+
+
+def test_skipped_required_check_stops_for_human_review(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    github.prs[url].checks = [("completed", "skipped")]
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "check_skipped"
+    assert run.outcome == "check_skipped"
+    assert run.ci == "skipped"
+    assert engine.store.live() == []
+    assert github.comments[0]["outcome"] == "check_skipped"
+    assert "did not run for this change set" in str(github.comments[0]["body"])
 
 
 def test_fenced_acceptance_command_is_unwrapped_before_validation(tmp_path: Path) -> None:
@@ -897,6 +912,83 @@ def test_default_ci_check_matches_github_check_run() -> None:
     )
 
 
+def test_required_ci_check_follows_pagination_and_uses_latest_run() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.params["check_name"] == "unit-tests (current)"
+        assert request.url.params["per_page"] == "100"
+        if request.url.params.get("page") == "2":
+            return httpx.Response(
+                200,
+                json={
+                    "check_runs": [
+                        {
+                            "name": "unit-tests (current)",
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "started_at": "2026-09-10T08:00:00Z",
+                        },
+                        {
+                            "name": "unit-tests (current)",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "started_at": "2026-09-10T09:00:00Z",
+                        },
+                    ]
+                },
+            )
+        next_url = request.url.copy_set_param("page", "2")
+        return httpx.Response(
+            200,
+            headers={"link": f'<{next_url}>; rel="next"'},
+            json={"check_runs": []},
+        )
+
+    github = GitHubClient(
+        Settings("devin", "org", "github"),
+        httpx.MockTransport(handler),
+    )
+
+    assert github.check("a" * 40, "unit-tests (current)") == (
+        "completed",
+        "success",
+    )
+    assert len(requests) == 2
+
+
+def test_absent_required_check_is_skipped_after_commit_checks_complete() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/status"):
+            return httpx.Response(200, json={"statuses": []})
+        if "check_name" in request.url.params:
+            return httpx.Response(200, json={"check_runs": []})
+        return httpx.Response(
+            200,
+            json={
+                "check_runs": [
+                    {
+                        "name": "docs",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2026-09-10T09:00:00Z",
+                    }
+                ]
+            },
+        )
+
+    github = GitHubClient(
+        Settings("devin", "org", "github"),
+        httpx.MockTransport(handler),
+    )
+
+    assert github.check("a" * 40, "unit-tests (current)") == (
+        "completed",
+        "skipped",
+    )
+
+
 def test_bot_triage_contract_is_used_for_maintainer_authorized_fix() -> None:
     contract = (
         base64.urlsafe_b64encode(
@@ -1431,7 +1523,7 @@ def test_report_keeps_backlog_and_untrusted_legacy_evidence_out_of_metrics(
     assert (
         "| [#55](https://github.com/ong6/superset/issues/55) | verified ready for review |"
     ) in markdown
-    assert "| [#56](https://github.com/ong6/superset/issues/56) | not started |" in markdown
+    assert "| [#56](https://github.com/ong6/superset/issues/56) | triaged |" in markdown
     assert "removing exclusion alone does not trigger processing" in markdown
     assert "snapshot, not proof of live session health" in markdown
     assert "A maintainer may comment `/devin fix`" in markdown
@@ -1473,6 +1565,37 @@ def test_report_includes_candidates_with_trusted_terminal_history(tmp_path: Path
     assert "| [#43](https://github.com/ong6/superset/issues/43) | ready for approval |" in markdown
     assert "- Triaged: 2/4 runs" in markdown
     assert "- Fix attempted: 2/4 runs" in markdown
+
+
+@pytest.mark.parametrize(
+    ("labels", "trusted_outcomes", "state"),
+    [
+        (["devin-candidate", "devin-fix"], set(), "queued"),
+        (["devin-candidate", "devin-fix"], {"verified"}, "queued"),
+        (["devin-candidate"], {"verified", "ci_failed"}, "ready for approval"),
+        (["devin-triaged"], set(), "triaged"),
+        (["devin-triaged"], {"verified", "ci_failed"}, "triaged"),
+        (["devin-triage-bug"], {"verified", "ci_failed"}, "status unavailable"),
+    ],
+)
+def test_report_backlog_state_uses_current_request_and_lifecycle_labels(
+    labels: list[str],
+    trusted_outcomes: set[str],
+    state: str,
+) -> None:
+    backlog = _report_backlog_issue(
+        ReportIssue(
+            number=48,
+            url="https://github.com/ong6/superset/issues/48",
+            state="open",
+            labels=labels,
+            comments=[],
+        ),
+        trusted_outcomes,
+    )
+
+    assert backlog is not None
+    assert backlog.state == state
 
 
 def test_transition_logs_form_a_grep_friendly_timeline(

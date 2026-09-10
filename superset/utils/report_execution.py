@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -37,6 +38,17 @@ MIN_REPORT_EXECUTION_WORK_SECONDS = 30.0
 
 def validate_report_execution_config(config: Mapping[str, Any]) -> None:
     """Validate the scheduled-report budget invariant during application startup."""
+
+    keys = (
+        "ALERT_REPORTS_EXECUTION_BUDGET_SECONDS",
+        "ALERT_REPORTS_EXECUTION_CAPTURE_RESERVE_SECONDS",
+        "ALERT_REPORTS_EXECUTION_DELIVERY_RESERVE_SECONDS",
+        "ALERT_REPORTS_EXECUTION_CLEANUP_RESERVE_SECONDS",
+        "ALERT_REPORTS_EXECUTION_HARD_TIMEOUT_GRACE_SECONDS",
+    )
+    for key in keys:
+        if not math.isfinite(float(config[key])):
+            raise ValueError(f"{key} must be a finite number")
 
     budget = float(config["ALERT_REPORTS_EXECUTION_BUDGET_SECONDS"])
     reserves = (
