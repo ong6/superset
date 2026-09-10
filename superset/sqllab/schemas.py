@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from marshmallow import fields, Schema, validate
+from marshmallow import fields, Schema, validate, ValidationError
 
 from superset.databases.schemas import EngineInformationSchema
 
@@ -25,9 +25,13 @@ tmp_table_name_validator = validate.Regexp(
     error="tmp_table_name must contain only letters, digits, and underscores",
 )
 
-# Restricts the optional query limit to a non-negative integer. Shared by the
-# SQL Lab execute payload schemas so both request paths validate it identically.
-query_limit_validator = validate.Range(min=0)
+
+def query_limit_validator(value: int | None) -> None:
+    """Rejects negative query limits; shared by the SQL Lab execute payload
+    schemas so both request paths validate it identically."""
+    if value is not None and value < 0:
+        raise ValidationError("Must be greater than or equal to 0.")
+
 
 sql_lab_get_results_schema = {
     "type": "object",
