@@ -591,7 +591,6 @@ class Engine:
                     ("Session", run.session_url or "not started"),
                     ("Target", self._target(run)),
                     ("Outcome", f"**{output.outcome}**"),
-                    ("ACUs", _run_acus(run)),
                     ("Elapsed", f"{int(self.clock() - run.created)}s"),
                     ("Nudges", str(run.nudges)),
                     ("Run key", f"`{run.key}`"),
@@ -760,7 +759,6 @@ class Engine:
                     ("Target", self._target(run)),
                     ("Outcome", f"**{outcome}**"),
                     ("Reason", self._github_text(note) or "Triage could not complete."),
-                    ("ACUs", _run_acus(run)),
                     ("Elapsed", f"{int(self.clock() - run.created)}s"),
                     ("Nudges", str(run.nudges)),
                     ("Run key", f"`{run.key}`"),
@@ -821,7 +819,6 @@ class Engine:
             ("Outcome", f"**{outcome}**"),
             ("Reason", self._github_text(note) or self._default_reason(outcome)),
             ("Next action", self._next_action(outcome)),
-            ("ACUs", _run_acus(run)),
             ("Elapsed", f"{int(self.clock() - run.created)}s"),
             (
                 "Time to PR",
@@ -967,7 +964,6 @@ _REPORT_MARKER = re.compile(r"<!-- (devin-issue-autopilot|devin-triage-request):
 _REPORT_ANY_MARKER = re.compile(r"<!-- (?:devin-issue-autopilot|devin-triage-request):[^>]+ -->")
 _REPORT_FIELD = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|$")
 _REPORT_LEGACY_OUTCOME = re.compile(r"(?mi)^\s*(?:[-*]\s*)?Outcome:\s*\S+")
-_REPORT_ACTIVE_LABELS = {"devin-fix", "devin-retry", "devin-triage"}
 
 
 def rebuild_report(
@@ -977,6 +973,7 @@ def rebuild_report(
     path: Path = Path("reports/summary.md"),
     repository: str = "ong6/superset",
     revision: str = "unknown",
+    include_raw_usage: bool = False,
 ) -> str:
     """Rebuild the report from durable GitHub issue and pull-request data."""
 
@@ -1050,7 +1047,7 @@ def rebuild_report(
             key=lambda backlog: backlog.issue,
         ),
     )
-    return write_report(runs, path, repository, coverage)
+    return write_report(runs, path, repository, coverage, include_raw_usage)
 
 
 def _excluded_report_evidence(author: str, body: str) -> str | None:
@@ -1076,20 +1073,59 @@ def _report_backlog_issue(
     if issue.state != "open":
         return None
     labels = set(issue.labels)
-    status: Literal["active", "excluded", "not started"] | None = None
-    if "devin-exclude" in labels:
-        status = "excluded"
-    elif labels.intersection(_REPORT_ACTIVE_LABELS):
-        status = "active"
-    elif not has_terminal_run:
-        status = "not started"
-    if status is None:
-        return None
+    states = [
+        ("devin-exclude", "excluded", "Paused; remove exclusion and request triage when ready."),
+        (
+            "devin-running",
+            "running",
+            "Follow the session link on the issue; review its latest progress.",
+        ),
+        (
+            "devin-triaging",
+            "triaging",
+            "Wait for the readiness brief; follow the issue session link.",
+        ),
+        ("devin-fix", "queued", "Repair requested; check the issue's workflow link."),
+        ("devin-retry", "queued", "Retry requested; check the issue's workflow link."),
+        ("devin-triage", "queued", "Triage requested; check the issue's workflow link."),
+        (
+            "devin-needs-info",
+            "needs information",
+            "Add the requested details, then add devin-triage.",
+        ),
+        (
+            "devin-needs-maintainer",
+            "needs maintainer",
+            "Resolve the readiness brief's maintainer decision.",
+        ),
+        ("devin-needs-human", "needs attention", "Inspect the failure before authorizing a retry."),
+        (
+            "devin-verified",
+            "ready for review",
+            "Review the linked PR and current CI before merging.",
+        ),
+        (
+            "devin-candidate",
+            "ready for approval",
+            "Review the contract; comment /devin fix to approve.",
+        ),
+        ("devin-triaged", "triaged", "Read the readiness brief and its next action."),
+    ]
+    state, next_action = (
+        ("status unavailable", "Inspect the latest issue comment before starting more work.")
+        if has_terminal_run
+        else ("not started", "Add devin-triage to request a readiness brief.")
+    )
+    for label, candidate_state, action in states:
+        if label in labels:
+            state, next_action = candidate_state, action
+            break
     return ReportBacklogIssue(
         issue=issue.number,
         issue_url=issue.url,
-        state=status,
+        state=state,
         labels=sorted(labels),
+        next_action=next_action,
     )
 
 
@@ -1181,12 +1217,6 @@ def _report_float(value: str | None) -> float | None:
         return None
 
 
-def _run_acus(run: Run) -> str:
-    """Render raw session usage without conflating missing data and zero."""
-
-    return f"{run.acus:.2f}" if run.acus_reported else "unknown"
-
-
 def _report_int(value: str | None) -> int:
     """Parse a report field as an integer with a zero fallback."""
 
@@ -1265,6 +1295,7 @@ def write_report(
     path: Path = Path("reports/summary.md"),
     repository: str = "ong6/superset",
     coverage: ReportCoverage | None = None,
+    include_raw_usage: bool = False,
 ) -> str:
     """Render the report and write the same Markdown returned to the caller."""
 
@@ -1424,16 +1455,29 @@ def write_report(
             else "n/a (0 fix attempts)",
         ),
     ]
+    if not include_raw_usage:
+        usage_column = headers.index("ACUs")
+        headers.pop(usage_column)
+        for row in rows:
+            row.pop(usage_column)
+        totals = [(name, value) for name, value in totals if "ACU" not in name]
+    usage_note = (
+        "\n\nRaw usage diagnostics (unverified): values are API telemetry, not verified "
+        "billing or cost. Zero is preserved; missing values remain unknown. "
+        "Do not use these figures for customer savings claims.\n\n"
+        if include_raw_usage
+        else "\n\nUsage figures are omitted because a reliable usage source has not been verified.\n\n"
+    )
     table = [
         "| " + " | ".join(headers) + " |",
         "|" + "|".join("---" for _ in headers) + "|",
         *["| " + " | ".join(row) + " |" for row in rows],
     ]
     backlog_table = [
-        "| issue | status | labels |",
-        "|---|---|---|",
+        "| issue | status | next action | labels |",
+        "|---|---|---|---|",
         *[
-            f"| [#{item.issue}]({item.issue_url}) | {item.state} | "
+            f"| [#{item.issue}]({item.issue_url}) | {item.state} | {item.next_action} | "
             f"{', '.join(f'`{label}`' for label in item.labels)} |"
             for item in coverage.backlog
         ],
@@ -1472,25 +1516,17 @@ def write_report(
         "success metrics)\n\n"
         "## Effectiveness totals\n\n"
         + "\n".join(f"- {name}: {value}" for name, value in totals)
-        + "\n\nACU telemetry is raw API data: zero is preserved, unknown is not zero, "
-        "and neither establishes billing or monetary cost. The daily ACU gate only "
-        "sums reported usage in the current runner's local cache; missing telemetry "
-        "is not counted and the cache is not durable across workflow runs. Session "
-        "caps remain 4/1 ACUs and 2400s/600s for remediation/triage, with one/zero "
-        "nudges.\n\n"
-        "## Terminal runs\n\n"
+        + usage_note
+        + "## Terminal runs\n\n"
         "How to read this: rows preserve every trusted terminal GitHub Actions "
         "comment; CI/policy verified is the controller's ready-for-review outcome, "
         "while merged and verified-and-merged are separate measures.\n\n"
         + "\n".join(table)
         + "\n\n## Current issue status/backlog\n\n"
         "These open issue rows are status context only and are excluded from attempts, "
-        "failures, success rates, timing, and usage denominators.\n\n"
-        + (
-            "\n".join(backlog_table)
-            if coverage.backlog
-            else "No active, excluded, or not-started Devin-labeled issues."
-        )
+        "failures, success rates, timing, and usage denominators. Labels are a snapshot, "
+        "not a session-health signal; follow the issue for live progress.\n\n"
+        + ("\n".join(backlog_table) if coverage.backlog else "No open Devin-labeled issues.")
         + "\n\n## Unverified legacy/unsupported evidence\n\n"
         "Only terminal tables authored by `github-actions[bot]` enter metrics. "
         "The following lifecycle-looking comments are linked for coverage visibility "
