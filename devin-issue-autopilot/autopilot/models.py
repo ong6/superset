@@ -212,7 +212,6 @@ class ReportSession(BaseModel):
 
     session_id: str
     url: str
-    title: str = ""
     status: str
     tags: list[str]
     title: str = ""
