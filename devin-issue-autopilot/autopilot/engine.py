@@ -65,6 +65,7 @@ TERMINAL = {
     "devin_error",
     "triaged",
     "triage_failed",
+    "needs_human",
 }
 
 
@@ -75,6 +76,7 @@ class DevinAdapter(Protocol):
     def get(self, session_id: str) -> SessionSnapshot: ...
     def nudge(self, session_id: str) -> None: ...
     def delete(self, session_id: str) -> None: ...
+    def find_open_issue_session(self, issue: int) -> SessionCreate | None: ...
 
 
 class ReportDevinAdapter(Protocol):
@@ -113,6 +115,7 @@ class GitHubAdapter(ReportGitHubAdapter, Protocol):
         request_actor: str | None = None,
         requested_at: str | None = None,
         purpose: str = "fix",
+        again: bool = False,
     ) -> Issue: ...
     def get_triage_issue(
         self,
@@ -128,6 +131,8 @@ class GitHubAdapter(ReportGitHubAdapter, Protocol):
     def progress(self, issue: int, key: str, body: str) -> str: ...
     def conclude(self, issue: int, key: str, body: str, outcome: str) -> str: ...
     def conclude_triage(self, issue: int, key: str, body: str, labels: list[str]) -> str: ...
+    def contract_outcome(self, issue: int, key: str) -> str | None: ...
+    def reply(self, issue: int, body: str) -> str: ...
 
 
 class Engine:
@@ -149,6 +154,39 @@ class Engine:
 
     def claim(self, issue: Issue) -> Run:
         return self.store.claim(issue, self.clock())
+
+    def existing_work(self, issue: Issue) -> SessionCreate | None:
+        if (active := self.store.active_for_contract(issue.contract_key)) is not None:
+            return SessionCreate(
+                session_id=active.session_id or active.run_id,
+                url=active.session_url
+                or f"https://github.com/{self.settings.github_repo}/issues/{issue.number}",
+            )
+        return self.devin.find_open_issue_session(issue.number)
+
+    def completed_contract_outcome(self, issue: Issue) -> str | None:
+        for run in self.store.for_contract(issue.contract_key):
+            if run.state in TERMINAL:
+                return run.outcome or run.state
+        return self.github.contract_outcome(issue.number, issue.contract_key)
+
+    def reply_existing_work(self, issue: Issue, session: SessionCreate) -> None:
+        self.github.reply(
+            issue.number,
+            (
+                f"Existing Devin work for this issue contract is still running: "
+                f"{session.url}\n\nNo new session was created."
+            ),
+        )
+
+    def reply_completed_contract(self, issue: Issue, outcome: str) -> None:
+        self.github.reply(
+            issue.number,
+            (
+                f"This issue contract already reached `{outcome}`. Update the issue contract "
+                "or comment `/devin fix --again` to authorize another session."
+            ),
+        )
 
     def prompt(self, issue: Issue, target: Target) -> str:
         issue_url = f"https://github.com/{self.settings.github_repo}/issues/{issue.number}"
@@ -765,7 +803,12 @@ class Engine:
         if run.comment_id is None:
             result = result or self._stored_result(run)
             body = self._terminal_body(run, outcome, note, result)
-            comment_id = self.github.conclude(run.issue, run.key, body, outcome)
+            comment_id = self.github.conclude(
+                run.issue,
+                run.contract_key or run.key,
+                body,
+                outcome,
+            )
             run = self.store.update(run.run_id, comment_id=comment_id, updated=self.clock())
         return run
 
@@ -810,7 +853,11 @@ class Engine:
             return None
 
     def _progress(self, run: Run, status: str) -> Run:
-        self.github.progress(run.issue, run.key, self._status_body(run, status))
+        self.github.progress(
+            run.issue,
+            run.contract_key or run.key,
+            self._status_body(run, status),
+        )
         return self.store.update(run.run_id, updated=self.clock())
 
     def _status_body(self, run: Run, status: str) -> str:
@@ -824,6 +871,7 @@ class Engine:
             ("Usage guard", self._acu_guard(run)),
             ("Verification", self._verification(run)),
             ("Outcome", "pending"),
+            ("Contract key", f"`{run.contract_key or run.key}`"),
             ("Run key", f"`{run.key}`"),
         ]
         return self._comment("Devin issue autopilot", rows, "Follow this comment for updates.")
@@ -853,6 +901,7 @@ class Engine:
                 f"{int(run.pr_opened - run.created)}s" if run.pr_opened is not None else "n/a",
             ),
             ("Nudges", str(run.nudges)),
+            ("Contract key", f"`{run.contract_key or run.key}`"),
             ("Run key", f"`{run.key}`"),
         ]
         sections: list[str] = []
@@ -953,7 +1002,7 @@ class Engine:
 
     @staticmethod
     def _next_action(outcome: str) -> str:
-        return {
+        action = {
             "verified": "Review the linked pull request; merge only after maintainer approval.",
             "merged": "No further action is required.",
             "merged_unverified": (
@@ -976,7 +1025,7 @@ class Engine:
             "blocked": (
                 "Provide the required input or narrow the contract, then apply `devin-retry`."
             ),
-            "no_change": "Close the issue if resolved, or update its reproduction and retriage.",
+            "no_change": "Close the issue if resolved, or update its reproduction.",
             "timed_out": "Review the session, then apply `devin-retry` if another run is safe.",
             "stale_sha": (
                 "Apply `devin-triage` to refresh against the latest target, then approve a "
@@ -986,6 +1035,10 @@ class Engine:
                 "Review the controller error, then apply `devin-retry` when it is resolved."
             ),
         }.get(outcome, "Review the outcome before starting another run.")
+        return (
+            f"{action} A repeat `/devin fix` requires an updated issue contract or "
+            "`/devin fix --again`."
+        )
 
     @staticmethod
     def _triage_status(output: TriageResult) -> str:

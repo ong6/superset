@@ -298,6 +298,18 @@ class DevinClient:
                 return sessions
             after = page.end_cursor
 
+    def find_open_issue_session(self, issue: int) -> SessionCreate | None:
+        """Find an open repository session whose title identifies the issue."""
+
+        marker = re.compile(rf"(?<!\d)#{issue}(?!\d)")
+        for session in self.list_report_sessions():
+            if (
+                session.status not in {"exit", "error", "suspended"}
+                and marker.search(session.title) is not None
+            ):
+                return SessionCreate(session_id=session.session_id, url=session.url)
+        return None
+
 
 class GitHubClient:
     def __init__(self, settings: Settings, transport: httpx.BaseTransport | None = None):
@@ -319,6 +331,7 @@ class GitHubClient:
         request_actor: str | None = None,
         requested_at: str | None = None,
         purpose: str = "fix",
+        again: bool = False,
     ) -> Issue:
         number = data.number
         body = data.body or ""
@@ -331,6 +344,7 @@ class GitHubClient:
                 body=body,
                 label_at=f"{purpose}:{requested_at}",
                 label_actor=request_actor,
+                again=again,
             )
         events = self.client.get(
             f"/repos/{self.repo}/issues/{number}/events", params={"per_page": 100}
@@ -347,8 +361,11 @@ class GitHubClient:
         ]
         if not labels:
             raise ValueError(f"Issue #{number} has no Devin label event")
-        label_at = labels[-1].created_at
-        actor = labels[-1].actor
+        selected = labels[-1]
+        assert selected.label is not None
+        label_at = f"{'retry' if selected.label.name == 'devin-retry' else 'fix'}:"
+        label_at += selected.created_at
+        actor = selected.actor
         return Issue(
             number=number,
             title=data.title,
@@ -472,6 +489,7 @@ class GitHubClient:
         request_actor: str | None = None,
         requested_at: str | None = None,
         purpose: str = "fix",
+        again: bool = False,
     ) -> Issue:
         response = self.client.get(f"/repos/{self.repo}/issues/{number}")
         response.raise_for_status()
@@ -480,6 +498,7 @@ class GitHubClient:
             request_actor,
             requested_at,
             purpose,
+            again,
         )
 
     def get_triage_issue(
@@ -712,6 +731,30 @@ class GitHubClient:
             include_request_marker=False,
         )
 
+    def contract_outcome(self, issue: int, key: str) -> str | None:
+        marker = self._request_marker(key)
+        for comment in reversed(self._comments(issue)):
+            if (
+                comment.user is None
+                or comment.user.login != "github-actions[bot]"
+                or marker not in comment.body
+            ):
+                continue
+            match = re.search(r"(?m)^\|\s*Outcome\s*\|\s*\**([^*|]+)", comment.body)
+            if match is not None:
+                outcome = match.group(1).strip()
+                if outcome != "pending":
+                    return outcome
+        return None
+
+    def reply(self, issue: int, body: str) -> str:
+        response = self.client.post(
+            f"/repos/{self.repo}/issues/{issue}/comments",
+            json={"body": body},
+        )
+        response.raise_for_status()
+        return str(GitHubComment.model_validate(response.json()).id)
+
     def conclude(self, issue: int, key: str, body: str, outcome: str) -> str:
         comment_id = self._upsert_comment(issue, key, body)
         label = {
@@ -782,6 +825,7 @@ class FakeDevin:
         self.acus_since_calls: list[float] = []
         self.acu_total = 0.0
         self.acu_error: httpx.HTTPError | None = None
+        self.open_issue_sessions: dict[int, SessionCreate] = {}
 
     def acus_since(self, timestamp: float) -> float:
         self.acus_since_calls.append(timestamp)
@@ -817,6 +861,9 @@ class FakeDevin:
     def delete(self, session_id: str) -> None:
         self.delete_calls += 1
 
+    def find_open_issue_session(self, issue: int) -> SessionCreate | None:
+        return self.open_issue_sessions.get(issue)
+
 
 class FakeGitHub:
     def __init__(
@@ -834,6 +881,8 @@ class FakeGitHub:
         self.report_prs: dict[str, ReportPullRequest] = {}
         self.report_checks: dict[str, tuple[str, str | None]] = {}
         self.check_calls: list[tuple[str, str]] = []
+        self.replies: list[dict[str, object]] = []
+        self.contract_outcomes: dict[str, str] = {}
 
     @classmethod
     def load(cls, path: Path) -> "FakeGitHub":
@@ -888,6 +937,7 @@ class FakeGitHub:
         request_actor: str | None = None,
         requested_at: str | None = None,
         purpose: str = "fix",
+        again: bool = False,
     ) -> Issue:
         issue = self.issues[number]
         if request_actor is None or requested_at is None:
@@ -896,6 +946,7 @@ class FakeGitHub:
             update={
                 "label_at": f"{purpose}:{requested_at}",
                 "label_actor": request_actor,
+                "again": again,
             }
         )
 
@@ -994,6 +1045,14 @@ class FakeGitHub:
                 "outcome": "pending",
             }
         )
+        return comment_id
+
+    def contract_outcome(self, issue: int, key: str) -> str | None:
+        return self.contract_outcomes.get(key)
+
+    def reply(self, issue: int, body: str) -> str:
+        comment_id = str(len(self.comments) + len(self.replies) + 1)
+        self.replies.append({"id": comment_id, "issue": issue, "body": body})
         return comment_id
 
     def conclude_triage(self, issue: int, key: str, body: str, labels: list[str]) -> str:

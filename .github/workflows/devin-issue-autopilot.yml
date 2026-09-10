@@ -92,7 +92,7 @@ jobs:
               const command = (context.payload.comment.body || "").trim().toLowerCase();
               if (
                 context.payload.issue.pull_request ||
-                !["/devin fix", "/devin retry"].includes(command)
+                !["/devin fix", "/devin fix --again", "/devin retry"].includes(command)
               ) {
                 skip("Ignoring non-Devin issue comment.");
                 return;
@@ -155,6 +155,7 @@ jobs:
             let mode = "";
             let purpose = "";
             let requestedAt = "";
+            let again = false;
             const event = context.eventName;
             const action = context.payload.action || "";
             if (event === "workflow_dispatch") {
@@ -193,9 +194,10 @@ jobs:
                 return;
               }
               const command = (context.payload.comment.body || "").trim().toLowerCase();
-              if (["/devin fix", "/devin retry"].includes(command)) {
+              if (["/devin fix", "/devin fix --again", "/devin retry"].includes(command)) {
                 mode = "remediate";
                 purpose = command.endsWith("retry") ? "retry" : "fix";
+                again = command === "/devin fix --again";
                 requestedAt = context.payload.comment.created_at;
               } else {
                 skip("Ignoring non-Devin issue comment.");
@@ -255,7 +257,40 @@ jobs:
             }
 
             const crypto = require("crypto");
-            const requestKey = `${issue_number}:${purpose}:${requestedAt}`;
+            function section(name) {
+              const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const match = (issue.body || "").match(
+                new RegExp(`^## ${escaped}\\s*\\n(.*?)(?=^## |(?![\\s\\S]))`, "ms"),
+              );
+              return match ? match[1].trim() : "";
+            }
+            const acceptance = section("Acceptance command");
+            const fencedAcceptance = acceptance.match(
+              /^```[A-Za-z0-9_-]*\n(.*?)\n```$/s,
+            );
+            const contract = {
+              acceptance_command: fencedAcceptance
+                ? fencedAcceptance[1].trim()
+                : acceptance,
+              allowed_paths: section("Allowed paths")
+                .split("\n")
+                .filter(line => line.trim().startsWith("-"))
+                .map(line => line.trim().slice(1).trim().replace(/^`+|`+$/g, "")),
+              check_name: (
+                (issue.body || "").match(/^CI check:\s*`?([^`\n]+)`?/im)?.[1] ||
+                "unit-tests (current)"
+              ).trim(),
+              expected: section("Expected"),
+              forbidden: section("Forbidden"),
+              reproduction: section("Reproduction") || section("Repro"),
+              symptom: section("Symptom"),
+              title: issue.title.trim(),
+            };
+            const contractHash = crypto.createHash("sha256")
+              .update(JSON.stringify(contract)).digest("hex").slice(0, 16);
+            const requestKey = mode === "triage"
+              ? `${issue_number}:${purpose}:${requestedAt}`
+              : `${issue_number}:${purpose}:${contractHash}`;
             const digest = crypto.createHash("sha256").update(requestKey)
               .digest("hex").slice(0, 16);
             const marker = mode === "triage"
@@ -267,10 +302,21 @@ jobs:
               issue_number,
               per_page: 100,
             });
-            if (comments.some(comment =>
+            const completedComment = comments.find(comment =>
               comment.user?.login === "github-actions[bot]" &&
               (comment.body || "").includes(marker)
-            )) {
+            );
+            if (!again && completedComment) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: [
+                  `This issue contract already reached a terminal outcome: ${completedComment.html_url}`,
+                  "",
+                  "Update the issue contract or comment `/devin fix --again` to authorize another session.",
+                ].join("\n"),
+              });
               skip(`Request ${requestKey} already reached a terminal outcome.`);
               return;
             }
@@ -296,6 +342,7 @@ jobs:
             core.setOutput("actor", actor);
             core.setOutput("requested_at", requestedAt);
             core.setOutput("claim_label", claimLabel);
+            core.setOutput("again", String(again));
 
       - name: Checkout repository
         if: always()
@@ -333,6 +380,7 @@ jobs:
           AUTOPILOT_PURPOSE: ${{ steps.claim.outputs.purpose }}
           AUTOPILOT_REQUEST_ACTOR: ${{ steps.claim.outputs.actor }}
           AUTOPILOT_REQUEST_AT: ${{ steps.claim.outputs.requested_at }}
+          AUTOPILOT_AGAIN: ${{ steps.claim.outputs.again }}
           DEVIN_API_KEY: ${{ steps.claim.outputs.mode == 'remediate' && secrets.DEVIN_API_KEY || '' }}
           DEVIN_TRIAGE_API_KEY: ${{ steps.claim.outputs.mode == 'triage' && secrets.DEVIN_TRIAGE_API_KEY || '' }}
           DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
@@ -346,11 +394,16 @@ jobs:
               --actor "$AUTOPILOT_REQUEST_ACTOR" \
               --requested-at "$AUTOPILOT_REQUEST_AT"
           else
+            again_args=()
+            if [ "$AUTOPILOT_AGAIN" = "true" ]; then
+              again_args+=(--again)
+            fi
             python -m autopilot once \
               --issue "$ISSUE_NUMBER" \
               --actor "$AUTOPILOT_REQUEST_ACTOR" \
               --requested-at "$AUTOPILOT_REQUEST_AT" \
-              --purpose "$AUTOPILOT_PURPOSE"
+              --purpose "$AUTOPILOT_PURPOSE" \
+              "${again_args[@]}"
           fi
 
       - name: Save controller state
