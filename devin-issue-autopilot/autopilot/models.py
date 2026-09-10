@@ -131,12 +131,25 @@ class ReportExcludedEvidence(BaseModel):
     reason: str
 
 
+ReportBacklogState = Literal[
+    "excluded",
+    "triaging",
+    "running",
+    "queued",
+    "ready for approval",
+    "needs information",
+    "needs maintainer/human",
+    "verified ready for review",
+    "not started",
+]
+
+
 class ReportBacklogIssue(BaseModel):
     """Current Devin-labeled issue state excluded from run metrics."""
 
     issue: int
     issue_url: str
-    state: str
+    state: ReportBacklogState
     labels: list[str]
     next_action: str
 

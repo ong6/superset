@@ -92,20 +92,19 @@ reproduced issue
 The report rebuilds a runner-local SQLite cache from GitHub evidence
 ([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/store.py#L227-L280)).
 The cache is disposable, and the configured daily gate is not durable
-organization-wide spend enforcement. Reported zero ACUs remain raw API
-telemetry; missing usage is unknown, and neither establishes free work or
-monetary savings
+organization-wide spend enforcement. Default customer-facing reports omit raw
+usage
 ([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L1327-L1343)).
 
 ### Live evidence
 
 Evidence snapshot: **2026-09-09 18:34 UTC**.
 
-| Issue | Role | API session | PR | Acceptance / CI | Controller | Merge | Raw ACUs | Elapsed |
-|---|---|---|---|---|---|---|---:|---:|
-| [#13](https://github.com/ong6/superset/issues/13) | README smoke | [session](https://app.devin.ai/sessions/4ece9ef53c7d4d5bbcba6613daa166dd) | [#14](https://github.com/ong6/superset/pull/14) | Doctest and CI passed | Ready for review (`verified`) | Merged | 0.00 reported | 553s |
-| [#48](https://github.com/ong6/superset/issues/48) | Real report limits defect | Pending | Pending | Contract declared; pending execution | Pending | Pending | Unknown | Pending |
-| [#49](https://github.com/ong6/superset/issues/49) | Real SQL Lab limit defect | Pending | Pending | Contract declared; pending execution | Pending | Pending | Unknown | Pending |
+| Issue | Role | API session | PR | Acceptance / CI | Controller | Merge | Elapsed |
+|---|---|---|---|---|---|---|---:|
+| [#13](https://github.com/ong6/superset/issues/13) | README smoke | [session](https://app.devin.ai/sessions/4ece9ef53c7d4d5bbcba6613daa166dd) | [#14](https://github.com/ong6/superset/pull/14) | Doctest and CI passed | Ready for review (`verified`) | Merged | 553s |
+| [#48](https://github.com/ong6/superset/issues/48) | Real report limits defect | Pending | Pending | Contract declared; pending execution | Pending | Pending | Pending |
+| [#49](https://github.com/ong6/superset/issues/49) | Real SQL Lab limit defect | Pending | Pending | Contract declared; pending execution | Pending | Pending | Pending |
 
 [#13/#14](https://github.com/ong6/superset/issues/13) proves the API-to-PR
 wiring with a README doctest. It is smoke evidence, not substantive Superset
@@ -153,15 +152,14 @@ Measure:
 - maintainer minutes spent per issue;
 - CI/policy-ready-for-review, merged, and verified-and-merged rates;
 - acceptance failures and policy rejection reasons;
-- duplicate, timeout, cancellation, stale-SHA, and escalation behavior; and
-- raw ACUs only for runs with complete telemetry.
+- duplicate, timeout, cancellation, stale-SHA, and escalation behavior.
 
 Pause on any unauthorized path, duplicate paid session, secret exposure, or two
 consecutive unusable PRs. Expand only after the cohort meets customer-agreed
-quality, capacity, cost, and security gates. Reduced maintainer effort and
+quality, capacity, bounded-execution, and security gates. Reduced maintainer effort and
 higher useful throughput are value hypotheses until those measurements exist.
 
 After the pilot, native Devin Automations can be an optional event trigger.
-Further customer delivery can add repository security profiles, per-team ACU
-caps and escalation owners, complete metrics-API reporting, sandboxed
-verification, and a queue only when measured volume requires it.
+Further customer delivery can add repository security profiles, team-specific
+execution caps and escalation owners, sandboxed verification, and a queue only
+when measured volume requires it.
