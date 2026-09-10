@@ -112,6 +112,27 @@ or `devin-fix`. Follow the session and pull request links in the issue and run
 | `/devin fix` or `devin-fix` | Authorized maintainer starts bounded remediation |
 | `/devin retry` or `devin-retry` | Authorized maintainer starts a new bounded remediation attempt |
 
+A newly opened issue moves from active triage into the approval queue once its
+readiness brief succeeds: `devin-triaging` marks the active run, and
+`devin-candidate` marks the issue `Ready for approval`.
+
+```python
+>>> STATUS_BY_LABEL = {
+...     "devin-triaging": "Triaging",
+...     "devin-candidate": "Ready for approval",
+... }
+>>> def issue_status(labels):
+...     for label in labels:
+...         if label in STATUS_BY_LABEL:
+...             return STATUS_BY_LABEL[label]
+...     return "Untriaged"
+>>> issue_status(["devin-triaging"])
+'Triaging'
+>>> issue_status(["devin-triaged", "devin-candidate"])
+'Ready for approval'
+
+```
+
 ## Issue contract
 
 An explicit issue contract uses these Markdown sections:
