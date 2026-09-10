@@ -73,11 +73,13 @@ BASE=223f3e587356a4f9ae67700110c535c4fc8f3e46
 HEAD=7caed0f94e9b59b74c3139493db925c4265e463b
 PY="$PWD/venv/bin/python"
 
-test "$(git rev-parse origin/master)" = "$BASE"
-test "$(gh pr view 53 --json baseRefOid --jq .baseRefOid)" = "$BASE"
-test "$(gh pr view 53 --json headRefOid --jq .headRefOid)" = "$HEAD"
+gh api repos/ong6/superset/pulls/53 |
+  jq -e --arg head "$HEAD" '
+    .head.sha == $head and
+    (.state == "open" or (.state == "closed" and .merged_at != null))
+  ' >/dev/null
 
-gh pr view 53 --json files --jq '.files[].path' |
+gh api repos/ong6/superset/pulls/53/files --paginate --jq '.[].filename' |
   diff -u <(printf '%s\n' \
     superset/utils/report_execution.py \
     tests/unit_tests/utils/test_report_execution.py) -
@@ -99,7 +101,15 @@ gh api repos/ong6/superset/issues/48/comments --paginate |
     )
   ' >/dev/null
 
-gh pr checks 53 --required
+gh api -X GET "repos/ong6/superset/commits/$HEAD/check-runs" \
+  -f per_page=100 |
+  jq -e '
+    any(.check_runs[];
+      .name == "unit-tests (current)" and
+      .status == "completed" and
+      .conclusion == "success"
+    )
+  ' >/dev/null
 ```
 
 The named `unit-tests (current)` check must be successful on `$HEAD` before
@@ -123,8 +133,8 @@ git diff "$BASE..$HEAD" -- tests/unit_tests/utils/test_report_execution.py |
   git -C "$ROOT/baseline" apply
 
 set +e
-"$PY" -m pytest -q \
-  "$ROOT/baseline/tests/unit_tests/utils/test_report_execution.py"
+(cd "$ROOT/baseline" && "$PY" -m pytest -q \
+  tests/unit_tests/utils/test_report_execution.py)
 RED_EXIT=$?
 set -e
 test "$RED_EXIT" -eq 1
@@ -134,6 +144,8 @@ test "$RED_EXIT" -eq 1
 (cd "$ROOT/fixed" && "$PY" -m pytest -q \
   tests/unit_tests/utils/test_report_execution.py)
 
+git -C "$ROOT/baseline" restore -- \
+  tests/unit_tests/utils/test_report_execution.py
 git worktree remove "$ROOT/baseline"
 git worktree remove "$ROOT/fixed"
 rmdir "$ROOT"
@@ -152,11 +164,13 @@ Expected evidence:
 2. Confirm #48's bot comment links the session, PR #53, and pinned base SHA.
 3. Confirm PR #53 still has exactly the two allowed changed paths and the
    expected head SHA.
-4. Confirm the named CI result and controller outcome. Keep the words
+4. Read PR #53's observed state. Say "open, not merged" only when GitHub says
+   `OPEN`; say "merged" only when GitHub says `MERGED`.
+5. Confirm the named CI result and controller outcome. Keep the words
    "pending", "verified", and "merged" distinct.
-5. Open browser tabs in this order: #49, its Actions workflow, #48, PR #53.
-6. Keep the six local slides unchanged and verify both arrow controls once.
-7. If GitHub, Actions, or CI is unavailable, skip the live mutation and use
+6. Open browser tabs in this order: #49, its Actions workflow, #48, PR #53.
+7. Keep the six local slides unchanged and verify both arrow controls once.
+8. If GitHub, Actions, or CI is unavailable, skip the live mutation and use
    only the precompleted #48 evidence.
 
 ## 60-second live GitHub segment
@@ -166,7 +180,7 @@ Expected evidence:
 | 0:00-0:10 | Issue #49 | Show it open and excluded. Say: "This is deliberately untouched; the maintainer still controls whether work starts." |
 | 0:10-0:25 | Issue #49 | Remove `devin-exclude`, then add `devin-triage` as one deliberate triage request. Do not add a fix label or comment. |
 | 0:25-0:40 | Issue/Actions | Show the queued or running acknowledgement. Say only what GitHub displays: "The request is queued" or "Triage is running." |
-| 0:40-1:00 | #48 then PR #53 | Switch to the precompleted rehearsal. Show issue-to-session-to-PR provenance, pinned base/head, changed paths, red/green tests, and named CI. Say "verified" only if the controller outcome is terminal verified; say "open, not merged" regardless. |
+| 0:40-1:00 | #48 then PR #53 | Switch to the precompleted rehearsal. Show issue-to-session-to-PR provenance, pinned base/head, changed paths, red/green tests, and named CI. Say "verified" only if the controller outcome is terminal verified, and state the merge status exactly as GitHub displays it. |
 
 Do not wait for #49 triage to finish. Do not request or approve a #49 repair
 during the recording.
@@ -175,11 +189,12 @@ during the recording.
 
 | Time | Point |
 |---:|---|
-| 0:00-0:35 | Observed issue intake and maintainer handoffs; avoid unsourced ROI claims. |
-| 0:35-1:20 | Bounded controller: authorization, immutable target, allowed paths, one session, named CI. |
-| 1:20-2:20 | Run the 60-second GitHub segment above. |
-| 2:20-3:35 | #48 proof: real defect, API session, scoped PR, full-environment red/green, independent CI. |
-| 3:35-4:10 | Trust boundary: controller-verified is not merged; maintainer keeps review and merge authority. |
+| 0:00-0:25 | Slide 1: observed issue intake and maintainer handoffs; avoid unsourced ROI claims. |
+| 0:25-0:35 | Slide 2 introduction: bounded authorization and deterministic proof. |
+| 0:35-1:35 | Run the 60-second GitHub segment above. |
+| 1:35-2:45 | #48 evidence: real defect, API session, scoped PR, full-environment red/green, independent CI. |
+| 2:45-3:15 | Why this workflow: least privilege, bounded execution, and maintainer control. |
+| 3:15-4:10 | Report: distinguish CI/policy verification, merge state, and verified-and-merged. |
 | 4:10-4:45 | Pilot ask: 10 maintainer-approved real issues over 30 days, measured against a manual baseline with explicit stop conditions. |
 
 ## Stop conditions
