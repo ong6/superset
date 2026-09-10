@@ -38,12 +38,10 @@ check progress rather than treating a label as a health signal.
 | [Paused](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-exclude) | Leave paused until deliberately selected. |
 
 New or reopened issue → automatic triage → readiness brief → maintainer
-`/devin fix` → Devin session and PR → independent verification → human review
-and merge. Adding `devin-triage` retriggers triage; an authorized `/devin fix`
-comment or `devin-fix` label starts bounded remediation. An excluded issue does
-not start automatically. For a prepared demo issue, remove `devin-exclude`,
-then add `devin-triage`; removing exclusion alone does not trigger work. Leave
-#48 and #49 paused until the demo is started deliberately.
+`/devin fix` → Devin session and PR → independent verification → human review.
+An excluded issue does not start automatically. For a prepared demo issue,
+remove `devin-exclude`, then add `devin-triage`; removing exclusion alone does
+not trigger work. Leave #48 and #49 paused until the demo is started deliberately.
 
 [Effectiveness reports and execution logs](https://github.com/ong6/superset/actions/workflows/devin-issue-autopilot.yml)
 are supporting evidence, not the approval interface. Reports refresh after issue
