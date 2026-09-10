@@ -17,6 +17,10 @@ specific language governing permissions and limitations
 under the License.
 -->
 
+Reviewers: start with the
+[Devin Issue Autopilot solution](devin-issue-autopilot/README.md) for the
+verified Docker path, report evidence, controls, and detailed demo runbook.
+
 ## Take-home
 
 - [GitHub Issue Remediation Pilot](takehome/README.md)
