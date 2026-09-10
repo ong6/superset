@@ -41,6 +41,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Update only after Docker tests and simulation pass for the new revision.
+  AUTOPILOT_REVISION: 9e89f45ebac39bc44f3fb27fd7440fbdc5354c3f
+
 concurrency:
   group: devin-issue-${{ github.repository_id }}-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
@@ -344,10 +348,13 @@ jobs:
             core.setOutput("claim_label", claimLabel);
             core.setOutput("again", String(again));
 
-      - name: Checkout repository
+      - name: Checkout pinned issue controller
         if: always()
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ong6/devin-issue-autopilot
+          ref: ${{ env.AUTOPILOT_REVISION }}
+          path: controller
           persist-credentials: false
 
       - name: Set up Python
@@ -358,7 +365,7 @@ jobs:
 
       - name: Install issue controller
         if: always()
-        run: python -m pip install ./devin-issue-autopilot
+        run: python -m pip install ./controller
 
       - name: Restore controller state
         if: steps.claim.outputs.claimed == 'true'
@@ -480,13 +487,13 @@ jobs:
         if: always()
         env:
           AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
-          AUTOPILOT_REPORT_REVISION: ${{ github.sha }}
+          AUTOPILOT_REPORT_REVISION: ong6/devin-issue-autopilot@${{ env.AUTOPILOT_REVISION }}
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
           DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          cd devin-issue-autopilot
+          cd controller
           python -m autopilot report --devin
           cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -499,9 +506,12 @@ jobs:
       issues: read
       pull-requests: read
     steps:
-      - name: Checkout repository
+      - name: Checkout pinned issue controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ong6/devin-issue-autopilot
+          ref: ${{ env.AUTOPILOT_REVISION }}
+          path: controller
           persist-credentials: false
 
       - name: Set up Python
@@ -510,18 +520,18 @@ jobs:
           python-version: "3.12"
 
       - name: Install issue controller
-        run: python -m pip install ./devin-issue-autopilot
+        run: python -m pip install ./controller
 
       - name: Publish observability report
         env:
           AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
-          AUTOPILOT_REPORT_REVISION: ${{ github.sha }}
+          AUTOPILOT_REPORT_REVISION: ong6/devin-issue-autopilot@${{ env.AUTOPILOT_REVISION }}
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
           DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          cd devin-issue-autopilot
+          cd controller
           python -m autopilot report --devin
           cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -529,7 +539,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: devin-issue-autopilot-report
-          path: devin-issue-autopilot/reports/summary.md
+          path: controller/reports/summary.md
           if-no-files-found: error
           retention-days: 30
 
@@ -542,9 +552,12 @@ jobs:
       issues: read
       pull-requests: read
     steps:
-      - name: Checkout repository
+      - name: Checkout pinned issue controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ong6/devin-issue-autopilot
+          ref: ${{ env.AUTOPILOT_REVISION }}
+          path: controller
           persist-credentials: false
 
       - name: Set up Python
@@ -553,18 +566,18 @@ jobs:
           python-version: "3.12"
 
       - name: Install issue controller
-        run: python -m pip install ./devin-issue-autopilot
+        run: python -m pip install ./controller
 
       - name: Rebuild observability report
         env:
           AUTOPILOT_DB: ${{ runner.temp }}/devin-issue-autopilot-report.db
-          AUTOPILOT_REPORT_REVISION: ${{ github.sha }}
+          AUTOPILOT_REPORT_REVISION: ong6/devin-issue-autopilot@${{ env.AUTOPILOT_REVISION }}
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
           DEVIN_ORG_ID: ${{ vars.DEVIN_ORG_ID }}
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          cd devin-issue-autopilot
+          cd controller
           python -m autopilot report --devin
           cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -572,6 +585,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: devin-issue-autopilot-report
-          path: devin-issue-autopilot/reports/summary.md
+          path: controller/reports/summary.md
           if-no-files-found: error
           retention-days: 30
