@@ -240,6 +240,61 @@ def test_base_json_conv():
         json.base_json_conv(np.datetime64())
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.int8(-8),
+        np.int16(-16),
+        np.int32(-32),
+        np.int64(-64),
+        np.int8(0),
+        np.uint8(0),
+        np.uint8(255),
+        np.uint16(65535),
+        np.uint32(4294967295),
+        np.uint64(2**53 + 1),
+        np.uint64(18446744073709551615),
+        np.int64(2**63 - 1),
+    ],
+)
+def test_base_json_conv_numpy_integers(value: np.integer) -> None:
+    result = json.base_json_conv(value)
+    assert type(result) is int
+    assert result == int(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.int8(-8),
+        np.int16(-16),
+        np.int32(7),
+        np.int64(-64),
+        np.uint8(0),
+        np.uint16(65535),
+        np.uint32(4294967295),
+        np.uint64(2**53 + 1),
+        np.uint64(18446744073709551615),
+    ],
+)
+def test_json_dumps_numpy_integers_round_trip(value: np.integer) -> None:
+    expected = int(value)
+    serialized = json.dumps({"value": value})
+    assert serialized == f'{{"value": {expected}}}'
+    assert json.loads(serialized) == {"value": expected}
+
+
+def test_base_json_conv_numpy_bool_and_unsupported_scalars() -> None:
+    assert json.base_json_conv(np.bool_(True)) is True
+    assert json.base_json_conv(np.bool_(False)) is False
+    assert json.dumps({"flag": np.bool_(True)}) == '{"flag": true}'
+
+    with pytest.raises(TypeError):
+        json.base_json_conv(np.float32(1.5))
+    with pytest.raises(TypeError):
+        json.base_json_conv(np.datetime64())
+
+
 def test_zlib_compression():
     json_str = '{"test": 1}'
     blob = zlib_compress(json_str)

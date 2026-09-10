@@ -82,7 +82,7 @@ def base_json_conv(obj: Any) -> Any:  # noqa: C901
 
     if isinstance(obj, memoryview):
         obj = obj.tobytes()
-    if isinstance(obj, np.int64):
+    if isinstance(obj, np.integer):
         return int(obj)
     if isinstance(obj, np.bool_):
         return bool(obj)
