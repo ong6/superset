@@ -51,6 +51,7 @@ from autopilot.store import Store
 
 TERMINAL = {
     "verified",
+    "check_skipped",
     "ci_failed",
     "policy_rejected",
     "no_pr",
@@ -383,6 +384,16 @@ class Engine:
             if self.clock() - started > 1800:
                 return self._finish(run, "ci_failed", ci="timed_out")
             return self._progress(run, f"Waiting for `{run.issue_model.check_name}`")
+        if conclusion == "skipped":
+            return self._finish(
+                run,
+                "check_skipped",
+                note=(
+                    f"The required acceptance check `{run.issue_model.check_name}` "
+                    "did not run for this change set."
+                ),
+                ci="skipped",
+            )
         if conclusion != "success":
             return self._finish(run, "ci_failed", ci=str(conclusion))
         return self._finish(run, "verified", ci="success")
@@ -903,6 +914,7 @@ class Engine:
     def _default_reason(outcome: str) -> str:
         return {
             "verified": "Required verification passed.",
+            "check_skipped": "The required acceptance test did not run for this change set.",
             "ci_failed": "Required verification did not pass.",
             "policy_rejected": "The run violated remediation policy.",
             "no_pr": "No open pull request was available to verify.",
@@ -917,6 +929,9 @@ class Engine:
     def _next_action(outcome: str) -> str:
         return {
             "verified": "Review the linked pull request; merge only after maintainer approval.",
+            "check_skipped": (
+                "Review the change manually and update its CI coverage before approval."
+            ),
             "ci_failed": (
                 "Review the failed check on the linked pull request, then apply "
                 "`devin-retry` after it is fixed."
@@ -1129,24 +1144,30 @@ def _report_backlog_issue(
             "Wait for workflow completion; this label is a snapshot, not proof "
             "of live session health."
         )
-    elif "devin-needs-info" in labels:
-        status = "needs information"
-        next_action = "Add the requested information, then add `devin-triage`."
-    elif labels.intersection({"devin-needs-maintainer", "devin-needs-human"}):
-        status = "needs maintainer/human"
-        next_action = "Maintainer review or a manual decision is required before retriggering."
-    elif "devin-verified" in labels or "verified" in trusted_outcomes:
-        status = "verified ready for review"
-        next_action = "Review the issue's linked pull request and merge when approved."
-    elif "devin-candidate" in labels:
-        status = "ready for approval"
-        next_action = "A maintainer may comment `/devin fix` or add `devin-fix`."
     elif labels.intersection({"devin-fix", "devin-retry", "devin-triage"}):
         status = "queued"
         next_action = (
             "Wait for the matching label event to be claimed; inspect issue comments "
             "if it remains queued."
         )
+    elif "devin-needs-info" in labels:
+        status = "needs information"
+        next_action = "Add the requested information, then add `devin-triage`."
+    elif labels.intersection({"devin-needs-maintainer", "devin-needs-human"}):
+        status = "needs maintainer/human"
+        next_action = "Maintainer review or a manual decision is required before retriggering."
+    elif "devin-verified" in labels:
+        status = "verified ready for review"
+        next_action = "Review the issue's linked pull request and merge when approved."
+    elif "devin-candidate" in labels:
+        status = "ready for approval"
+        next_action = "A maintainer may comment `/devin fix` or add `devin-fix`."
+    elif "devin-triaged" in labels:
+        status = "triaged"
+        next_action = "Read the readiness brief and its next action."
+    elif trusted_outcomes:
+        status = "status unavailable"
+        next_action = "Inspect the latest issue comment before starting more work."
     else:
         status = "not started"
         next_action = "Add `devin-triage` to request a new readiness brief."
