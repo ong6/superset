@@ -169,6 +169,21 @@ def test_acceptance_output_cannot_break_the_terminal_code_fence(tmp_path: Path) 
     assert "@\u200bmaintainer" in body
 
 
+def test_skipped_required_check_stops_for_human_review(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    github.prs[url].checks = [("completed", "skipped")]
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "check_skipped"
+    assert run.outcome == "check_skipped"
+    assert run.ci == "skipped"
+    assert engine.store.live() == []
+    assert github.comments[0]["outcome"] == "check_skipped"
+    assert "did not run for this change set" in str(github.comments[0]["body"])
+
+
 def test_fenced_acceptance_command_is_unwrapped_before_validation(tmp_path: Path) -> None:
     url = "https://github.com/ong6/superset/pull/10"
     engine, devin, _, item = setup_engine(tmp_path, [exit_snapshot(url)])
@@ -830,6 +845,83 @@ def test_default_ci_check_matches_github_check_run() -> None:
     assert github.check("a" * 40, settings.allowed_checks[0]) == (
         "completed",
         "success",
+    )
+
+
+def test_required_ci_check_follows_pagination_and_uses_latest_run() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.params["check_name"] == "unit-tests (current)"
+        assert request.url.params["per_page"] == "100"
+        if request.url.params.get("page") == "2":
+            return httpx.Response(
+                200,
+                json={
+                    "check_runs": [
+                        {
+                            "name": "unit-tests (current)",
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "started_at": "2026-09-10T08:00:00Z",
+                        },
+                        {
+                            "name": "unit-tests (current)",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "started_at": "2026-09-10T09:00:00Z",
+                        },
+                    ]
+                },
+            )
+        next_url = request.url.copy_set_param("page", "2")
+        return httpx.Response(
+            200,
+            headers={"link": f'<{next_url}>; rel="next"'},
+            json={"check_runs": []},
+        )
+
+    github = GitHubClient(
+        Settings("devin", "org", "github"),
+        httpx.MockTransport(handler),
+    )
+
+    assert github.check("a" * 40, "unit-tests (current)") == (
+        "completed",
+        "success",
+    )
+    assert len(requests) == 2
+
+
+def test_absent_required_check_is_skipped_after_commit_checks_complete() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/status"):
+            return httpx.Response(200, json={"statuses": []})
+        if "check_name" in request.url.params:
+            return httpx.Response(200, json={"check_runs": []})
+        return httpx.Response(
+            200,
+            json={
+                "check_runs": [
+                    {
+                        "name": "docs",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2026-09-10T09:00:00Z",
+                    }
+                ]
+            },
+        )
+
+    github = GitHubClient(
+        Settings("devin", "org", "github"),
+        httpx.MockTransport(handler),
+    )
+
+    assert github.check("a" * 40, "unit-tests (current)") == (
+        "completed",
+        "skipped",
     )
 
 

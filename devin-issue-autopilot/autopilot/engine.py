@@ -51,6 +51,7 @@ from autopilot.store import Store
 
 TERMINAL = {
     "verified",
+    "check_skipped",
     "ci_failed",
     "policy_rejected",
     "no_pr",
@@ -386,6 +387,16 @@ class Engine:
             if self.clock() - started > 1800:
                 return self._finish(run, "ci_failed", ci="timed_out")
             return self._progress(run, f"Waiting for `{run.issue_model.check_name}`")
+        if conclusion == "skipped":
+            return self._finish(
+                run,
+                "check_skipped",
+                note=(
+                    f"The required acceptance check `{run.issue_model.check_name}` "
+                    "did not run for this change set."
+                ),
+                ci="skipped",
+            )
         if conclusion != "success":
             return self._finish(run, "ci_failed", ci=str(conclusion))
         return self._finish(run, "verified", ci="success")
@@ -878,6 +889,7 @@ class Engine:
     def _default_reason(outcome: str) -> str:
         return {
             "verified": "Required verification passed.",
+            "check_skipped": "The required acceptance test did not run for this change set.",
             "ci_failed": "Required verification did not pass.",
             "policy_rejected": "The run violated remediation policy.",
             "no_pr": "No open pull request was available to verify.",
@@ -892,6 +904,9 @@ class Engine:
     def _next_action(outcome: str) -> str:
         return {
             "verified": "Review the linked pull request; merge only after maintainer approval.",
+            "check_skipped": (
+                "Review the change manually and update its CI coverage before approval."
+            ),
             "ci_failed": (
                 "Review the failed check on the linked pull request, then apply "
                 "`devin-retry` after it is fixed."
