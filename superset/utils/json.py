@@ -84,6 +84,8 @@ def base_json_conv(obj: Any) -> Any:  # noqa: C901
         obj = obj.tobytes()
     if isinstance(obj, np.int64):
         return int(obj)
+    if isinstance(obj, (np.float16, np.float32)):
+        return float(obj)
     if isinstance(obj, np.bool_):
         return bool(obj)
     if isinstance(obj, np.ndarray):
