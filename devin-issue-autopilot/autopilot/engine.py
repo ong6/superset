@@ -1104,24 +1104,30 @@ def _report_backlog_issue(
             "Wait for workflow completion; this label is a snapshot, not proof "
             "of live session health."
         )
-    elif "devin-needs-info" in labels:
-        status = "needs information"
-        next_action = "Add the requested information, then add `devin-triage`."
-    elif labels.intersection({"devin-needs-maintainer", "devin-needs-human"}):
-        status = "needs maintainer/human"
-        next_action = "Maintainer review or a manual decision is required before retriggering."
-    elif "devin-verified" in labels or "verified" in trusted_outcomes:
-        status = "verified ready for review"
-        next_action = "Review the issue's linked pull request and merge when approved."
-    elif "devin-candidate" in labels:
-        status = "ready for approval"
-        next_action = "A maintainer may comment `/devin fix` or add `devin-fix`."
     elif labels.intersection({"devin-fix", "devin-retry", "devin-triage"}):
         status = "queued"
         next_action = (
             "Wait for the matching label event to be claimed; inspect issue comments "
             "if it remains queued."
         )
+    elif "devin-needs-info" in labels:
+        status = "needs information"
+        next_action = "Add the requested information, then add `devin-triage`."
+    elif labels.intersection({"devin-needs-maintainer", "devin-needs-human"}):
+        status = "needs maintainer/human"
+        next_action = "Maintainer review or a manual decision is required before retriggering."
+    elif "devin-verified" in labels:
+        status = "verified ready for review"
+        next_action = "Review the issue's linked pull request and merge when approved."
+    elif "devin-candidate" in labels:
+        status = "ready for approval"
+        next_action = "A maintainer may comment `/devin fix` or add `devin-fix`."
+    elif "devin-triaged" in labels:
+        status = "triaged"
+        next_action = "Read the readiness brief and its next action."
+    elif trusted_outcomes:
+        status = "status unavailable"
+        next_action = "Inspect the latest issue comment before starting more work."
     else:
         status = "not started"
         next_action = "Add `devin-triage` to request a new readiness brief."

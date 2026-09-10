@@ -24,7 +24,7 @@ import httpx
 import pytest
 
 from autopilot.adapters import DevinClient, FakeDevin, FakeGitHub, GitHubClient
-from autopilot.engine import Engine, rebuild_report, write_report
+from autopilot.engine import Engine, _report_backlog_issue, rebuild_report, write_report
 from autopilot.models import (
     Issue,
     ReportComment,
@@ -1307,7 +1307,7 @@ def test_report_keeps_backlog_and_untrusted_legacy_evidence_out_of_metrics(
     assert (
         "| [#55](https://github.com/ong6/superset/issues/55) | verified ready for review |"
     ) in markdown
-    assert "| [#56](https://github.com/ong6/superset/issues/56) | not started |" in markdown
+    assert "| [#56](https://github.com/ong6/superset/issues/56) | triaged |" in markdown
     assert "removing exclusion alone does not trigger processing" in markdown
     assert "snapshot, not proof of live session health" in markdown
     assert "A maintainer may comment `/devin fix`" in markdown
@@ -1349,6 +1349,37 @@ def test_report_includes_candidates_with_trusted_terminal_history(tmp_path: Path
     assert "| [#43](https://github.com/ong6/superset/issues/43) | ready for approval |" in markdown
     assert "- Triaged: 2/4 runs" in markdown
     assert "- Fix attempted: 2/4 runs" in markdown
+
+
+@pytest.mark.parametrize(
+    ("labels", "trusted_outcomes", "state"),
+    [
+        (["devin-candidate", "devin-fix"], set(), "queued"),
+        (["devin-candidate", "devin-fix"], {"verified"}, "queued"),
+        (["devin-candidate"], {"verified", "ci_failed"}, "ready for approval"),
+        (["devin-triaged"], set(), "triaged"),
+        (["devin-triaged"], {"verified", "ci_failed"}, "triaged"),
+        (["devin-triage-bug"], {"verified", "ci_failed"}, "status unavailable"),
+    ],
+)
+def test_report_backlog_state_uses_current_request_and_lifecycle_labels(
+    labels: list[str],
+    trusted_outcomes: set[str],
+    state: str,
+) -> None:
+    backlog = _report_backlog_issue(
+        ReportIssue(
+            number=48,
+            url="https://github.com/ong6/superset/issues/48",
+            state="open",
+            labels=labels,
+            comments=[],
+        ),
+        trusted_outcomes,
+    )
+
+    assert backlog is not None
+    assert backlog.state == state
 
 
 def test_transition_logs_form_a_grep_friendly_timeline(
