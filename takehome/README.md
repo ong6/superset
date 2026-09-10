@@ -98,20 +98,23 @@ usage
 
 ### Live evidence
 
-Evidence snapshot: **2026-09-10 06:17 UTC**.
+Evidence snapshot: **2026-09-10 06:41 UTC**.
 
 | Issue | Role | API session | PR | Acceptance / CI | Controller | Merge | Elapsed |
 |---|---|---|---|---|---|---|---:|
 | [#13](https://github.com/ong6/superset/issues/13) | README smoke | [session](https://app.devin.ai/sessions/4ece9ef53c7d4d5bbcba6613daa166dd) | [#14](https://github.com/ong6/superset/pull/14) | Doctest and CI passed | Ready for review (`verified`) | Merged | 553s |
-| [#48](https://github.com/ong6/superset/issues/48) | Real report limits defect | [session](https://app.devin.ai/sessions/6008929ca38344338baa7d628362d29e) | [#53](https://github.com/ong6/superset/pull/53) | Full-environment regression: baseline 15 failed/14 passed; head 29 passed | Waiting for `unit-tests (current)` | Open | Pending |
+| [#48](https://github.com/ong6/superset/issues/48) | Real report limits defect | [session](https://app.devin.ai/sessions/6008929ca38344338baa7d628362d29e) | [#53](https://github.com/ong6/superset/pull/53) | Full-environment regression: baseline 15 failed/14 passed; head 29 passed; [`unit-tests (current)`](https://github.com/ong6/superset/actions/runs/34444060285/job/102764968612) passed | [Ready for review (`verified`)](https://github.com/ong6/superset/issues/48#issuecomment-5613943199) | Open | 2008s |
 | [#49](https://github.com/ong6/superset/issues/49) | Fresh live candidate | Not started | None | Preserved open with `devin-exclude` | Not started | None | N/A |
 
 [#13/#14](https://github.com/ong6/superset/issues/13) proves the API-to-PR
 wiring with a README doctest. It is smoke evidence, not substantive Superset
 repair capacity. Issue #48 provides a real generated repair and local red/green
-evidence, but remains unverified until the named CI check and controller finish.
-Issue #49 remains excluded and untouched for the presenter-initiated live
-request.
+evidence. The named CI passed and the controller marked the exact PR head
+verified; PR #53 remains open for maintainer review. The
+[refreshed report](https://github.com/ong6/superset/actions/runs/34446329431)
+records verification and merge state separately and omits raw usage diagnostics
+by default. Issue #49 remains excluded and untouched for the
+presenter-initiated live request.
 
 ## WHY
 
