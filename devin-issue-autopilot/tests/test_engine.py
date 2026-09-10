@@ -167,6 +167,7 @@ def test_merged_pr_with_passing_check_is_verified_and_merged(tmp_path: Path) -> 
     assert run.state == "merged"
     assert run.outcome == "merged"
     assert run.ci == "success"
+    assert engine.store.live() == []
     assert github.check_calls == [("a" * 40, "unit-tests (current)")]
     assert github.comments[0]["outcome"] == "merged"
     assert "Required verification passed before the pull request merged." in str(
@@ -186,6 +187,7 @@ def test_merged_pr_with_failing_check_is_merged_unverified(tmp_path: Path) -> No
     assert run.state == "merged_unverified"
     assert run.outcome == "merged_unverified"
     assert run.ci == "failure"
+    assert engine.store.live() == []
     assert github.check_calls == [("a" * 40, "unit-tests (current)")]
     assert github.comments[0]["outcome"] == "merged_unverified"
 
@@ -199,6 +201,7 @@ def test_closed_unmerged_pr_is_pr_closed(tmp_path: Path) -> None:
 
     assert run.state == "pr_closed"
     assert run.outcome == "pr_closed"
+    assert engine.store.live() == []
     assert github.check_calls == []
     assert github.comments[0]["outcome"] == "pr_closed"
     assert "The pull request was closed without merging." in str(github.comments[0]["body"])
