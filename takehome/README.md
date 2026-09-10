@@ -48,14 +48,14 @@ The FDE proposal turns suitable issues into useful engineering capacity through
 one bounded path inside GitHub. Maintainers authorize work, receive a scoped PR
 with deterministic evidence, and keep review and merge authority.
 
-The reviewed implementation in [#47](https://github.com/ong6/superset/pull/47)
+The reviewed implementation in [#51](https://github.com/ong6/superset/pull/51)
 adds a living status report. It reconstructs available terminal controller
 comments from GitHub, reads the current PR state, and optionally reconciles
 tagged Devin sessions
-([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L962-L1003)).
+([code](https://github.com/ong6/superset/blob/3a46b45ef7ed88233ec8a8ba05fa4fbb10b45e13/devin-issue-autopilot/autopilot/engine.py#L969-L1048)).
 It reports CI/policy-ready-for-review, merged, and verified-and-merged as
 separate measures
-([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L1247-L1297)).
+([code](https://github.com/ong6/superset/blob/3a46b45ef7ed88233ec8a8ba05fa4fbb10b45e13/devin-issue-autopilot/autopilot/engine.py#L1377-L1456)).
 
 ## HOW
 
@@ -74,43 +74,44 @@ reproduced issue
 ### Three architectural decisions
 
 1. **Claim once before paying for work.** The workflow
-   [serializes each issue](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/.github/workflows/devin-issue-autopilot.yml#L44-L46),
+   [serializes each issue](https://github.com/ong6/superset/blob/3a46b45ef7ed88233ec8a8ba05fa4fbb10b45e13/.github/workflows/devin-issue-autopilot.yml#L44-L46),
    derives an idempotency key from the issue, purpose, and request time, checks
    the terminal marker, and acquires a claim label before session creation.
    Duplicate deliveries return without starting a second paid session
-   ([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/.github/workflows/devin-issue-autopilot.yml#L256-L292)).
+   ([code](https://github.com/ong6/superset/blob/3a46b45ef7ed88233ec8a8ba05fa4fbb10b45e13/.github/workflows/devin-issue-autopilot.yml#L256-L292)).
 2. **Treat Devin output as a proposal.** Devin must return structured output.
    The controller resolves the PR, checks the closing reference, pinned base
    SHA, allowed paths, and named CI result on the PR head SHA. Passing those
    checks means ready for maintainer review; it does not mean merged
-   ([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L305-L382)).
+   ([code](https://github.com/ong6/superset/blob/3a46b45ef7ed88233ec8a8ba05fa4fbb10b45e13/devin-issue-autopilot/autopilot/engine.py#L349-L390)).
 3. **Bound the recovery loop.** Remediation sessions have a
-   [4-ACU API limit](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/adapters.py#L175-L193);
+   [4-ACU API limit](https://github.com/ong6/superset/blob/3a46b45ef7ed88233ec8a8ba05fa4fbb10b45e13/devin-issue-autopilot/autopilot/adapters.py#L176-L193);
    the controller sends
-   [one nudge and cancels after 40 minutes](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L246-L272).
+   [one nudge and cancels after 40 minutes](https://github.com/ong6/superset/blob/3a46b45ef7ed88233ec8a8ba05fa4fbb10b45e13/devin-issue-autopilot/autopilot/engine.py#L254-L280).
 
 The report rebuilds a runner-local SQLite cache from GitHub evidence
-([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/store.py#L227-L280)).
+([code](https://github.com/ong6/superset/blob/3a46b45ef7ed88233ec8a8ba05fa4fbb10b45e13/devin-issue-autopilot/autopilot/store.py#L227-L280)).
 The cache is disposable, and the configured daily gate is not durable
 organization-wide spend enforcement. Default customer-facing reports omit raw
 usage
-([code](https://github.com/ong6/superset/blob/a75b5f753aca88a2ee7706eb6c4bd7ffaba72cb2/devin-issue-autopilot/autopilot/engine.py#L1327-L1343)).
+([code](https://github.com/ong6/superset/blob/223f3e587356a4f9ae67700110c535c4fc8f3e46/devin-issue-autopilot/autopilot/engine.py#L1380-L1471)).
 
 ### Live evidence
 
-Evidence snapshot: **2026-09-09 18:34 UTC**.
+Evidence snapshot: **2026-09-10 06:17 UTC**.
 
 | Issue | Role | API session | PR | Acceptance / CI | Controller | Merge | Elapsed |
 |---|---|---|---|---|---|---|---:|
 | [#13](https://github.com/ong6/superset/issues/13) | README smoke | [session](https://app.devin.ai/sessions/4ece9ef53c7d4d5bbcba6613daa166dd) | [#14](https://github.com/ong6/superset/pull/14) | Doctest and CI passed | Ready for review (`verified`) | Merged | 553s |
-| [#48](https://github.com/ong6/superset/issues/48) | Real report limits defect | Pending | Pending | Contract declared; pending execution | Pending | Pending | Pending |
-| [#49](https://github.com/ong6/superset/issues/49) | Real SQL Lab limit defect | Pending | Pending | Contract declared; pending execution | Pending | Pending | Pending |
+| [#48](https://github.com/ong6/superset/issues/48) | Real report limits defect | [session](https://app.devin.ai/sessions/6008929ca38344338baa7d628362d29e) | [#53](https://github.com/ong6/superset/pull/53) | Full-environment regression: baseline 15 failed/14 passed; head 29 passed | Waiting for `unit-tests (current)` | Open | Pending |
+| [#49](https://github.com/ong6/superset/issues/49) | Fresh live candidate | Not started | None | Preserved open with `devin-exclude` | Not started | None | N/A |
 
 [#13/#14](https://github.com/ong6/superset/issues/13) proves the API-to-PR
 wiring with a README doctest. It is smoke evidence, not substantive Superset
-repair capacity. Issues #48 and #49 are reproduced shortcomings with bounded
-contracts; no session, generated PR, executed acceptance check, or terminal
-controller outcome was available at the snapshot.
+repair capacity. Issue #48 provides a real generated repair and local red/green
+evidence, but remains unverified until the named CI check and controller finish.
+Issue #49 remains excluded and untouched for the presenter-initiated live
+request.
 
 ## WHY
 
@@ -156,8 +157,9 @@ Measure:
 
 Pause on any unauthorized path, duplicate paid session, secret exposure, or two
 consecutive unusable PRs. Expand only after the cohort meets customer-agreed
-quality, capacity, bounded-execution, and security gates. Reduced maintainer effort and
-higher useful throughput are value hypotheses until those measurements exist.
+quality, capacity, bounded-execution, and security gates. Reduced maintainer
+effort and higher useful throughput are value hypotheses until those
+measurements exist.
 
 After the pilot, native Devin Automations can be an optional event trigger.
 Further customer delivery can add repository security profiles, team-specific
