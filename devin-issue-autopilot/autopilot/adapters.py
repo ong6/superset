@@ -82,6 +82,7 @@ class GitHubEvent(BaseModel):
 
 class GitHubPullData(BaseModel):
     state: str
+    merged_at: str | None = None
     body: str | None = None
     head: GitHubRef
     base: GitHubRef
@@ -93,6 +94,7 @@ class GitHubPullStateData(BaseModel):
     state: str
     created_at: str
     merged_at: str | None = None
+    head: GitHubRef
 
 
 class GitHubRepoData(BaseModel):
@@ -152,6 +154,7 @@ class FakePR(BaseModel):
     head_sha: str
     files: list[str]
     state: str = "open"
+    merged_at: str | None = None
     body: str = ""
     head_ref: str = "devin/issue-1-fixture"
     base_sha: str = "b" * 40
@@ -454,6 +457,7 @@ class GitHubClient:
                         number=data.number,
                         url=data.html_url,
                         state=data.state,
+                        body=data.body or "",
                         labels=labels,
                         comments=comments,
                     )
@@ -525,6 +529,7 @@ class GitHubClient:
         data = GitHubPullData.model_validate(response.json())
         return PullRequest(
             state=data.state,
+            merged_at=data.merged_at,
             body=data.body or "",
             head_sha=data.head.sha,
             head_ref=data.head.ref,
@@ -544,7 +549,13 @@ class GitHubClient:
         return ReportPullRequest(
             state="merged" if data.merged_at is not None else data.state,
             created_at=data.created_at,
+            head_sha=data.head.sha,
         )
+
+    def report_check(self, sha: str, name: str) -> tuple[str, str | None]:
+        """Read the required check while rebuilding historical report rows."""
+
+        return self.check(sha, name)
 
     def pr_files(self, url: str) -> list[str]:
         number = url.rsplit("/", 1)[-1]
@@ -703,9 +714,20 @@ class GitHubClient:
 
     def conclude(self, issue: int, key: str, body: str, outcome: str) -> str:
         comment_id = self._upsert_comment(issue, key, body)
-        label = "devin-verified" if outcome == "verified" else "devin-needs-human"
-        other_label = "devin-needs-human" if label == "devin-verified" else "devin-verified"
-        for removable in (other_label, "devin-fix", "devin-retry", "devin-candidate"):
+        label = {
+            "verified": "devin-verified",
+            "merged": "devin-merged",
+        }.get(outcome, "devin-needs-human")
+        for removable in (
+            "devin-verified",
+            "devin-merged",
+            "devin-needs-human",
+            "devin-fix",
+            "devin-retry",
+            "devin-candidate",
+        ):
+            if removable == label:
+                continue
             removed = self.client.delete(f"/repos/{self.repo}/issues/{issue}/labels/{removable}")
             if removed.status_code != 404:
                 removed.raise_for_status()
@@ -731,6 +753,7 @@ class GitHubClient:
             "devin-candidate",
             "devin-triage",
             "devin-verified",
+            "devin-merged",
             "devin-needs-human",
         ):
             removed = self.client.delete(f"/repos/{self.repo}/issues/{issue}/labels/{removable}")
@@ -809,6 +832,8 @@ class FakeGitHub:
         self.labeler_is_authorized = True
         self.report_fixture: list[ReportIssue] | None = None
         self.report_prs: dict[str, ReportPullRequest] = {}
+        self.report_checks: dict[str, tuple[str, str | None]] = {}
+        self.check_calls: list[tuple[str, str]] = []
 
     @classmethod
     def load(cls, path: Path) -> "FakeGitHub":
@@ -900,6 +925,7 @@ class FakeGitHub:
         pr = self.prs[url]
         return PullRequest(
             state=pr.state,
+            merged_at=pr.merged_at,
             body=pr.body,
             head_sha=pr.head_sha,
             head_ref=pr.head_ref,
@@ -915,12 +941,19 @@ class FakeGitHub:
         return ReportPullRequest(
             state=self.prs[url].state,
             created_at=datetime.now(UTC).isoformat(),
+            head_sha=self.prs[url].head_sha,
         )
+
+    def report_check(self, sha: str, name: str) -> tuple[str, str | None]:
+        """Return fixture-backed report check metadata."""
+
+        return self.report_checks[sha]
 
     def pr_files(self, url: str) -> list[str]:
         return self.prs[url].files
 
     def check(self, sha: str, name: str) -> tuple[str, str | None]:
+        self.check_calls.append((sha, name))
         pr = next(item for item in self.prs.values() if item.head_sha == sha)
         checks = pr.checks
         if len(checks) > 1:

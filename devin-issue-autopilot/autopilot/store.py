@@ -205,10 +205,13 @@ class Store:
     def live(self) -> list[Run]:
         terminal = (
             "verified",
+            "merged",
+            "merged_unverified",
             "check_skipped",
             "ci_failed",
             "policy_rejected",
             "no_pr",
+            "pr_closed",
             "blocked",
             "no_change",
             "timed_out",

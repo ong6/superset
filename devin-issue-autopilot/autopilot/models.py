@@ -117,6 +117,7 @@ class ReportIssue(BaseModel):
     number: int
     url: str
     state: str
+    body: str = ""
     labels: list[str]
     comments: list[ReportComment]
 
@@ -186,6 +187,7 @@ class ReportPullRequest(BaseModel):
 
     state: str
     created_at: str
+    head_sha: str = ""
 
 
 class ReportSessionsPage(BaseModel):
@@ -221,6 +223,7 @@ class ReportRun(BaseModel):
 
 class PullRequest(BaseModel):
     state: str
+    merged_at: str | None = None
     body: str
     head_sha: str
     head_ref: str

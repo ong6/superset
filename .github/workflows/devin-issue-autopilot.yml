@@ -104,6 +104,7 @@ jobs:
               ["devin-retry", "D4C5F9", "Start a new bounded remediation generation"],
               ["devin-triage", "BFD4F2", "Request a new read-only Devin readiness brief"],
               ["devin-verified", "0E8A16", "Remediation PR passed configured verification"],
+              ["devin-merged", "1D76DB", "Remediation PR merged after configured verification"],
               ["devin-needs-human", "B60205", "Remediation stopped and needs maintainer attention"],
               ["devin-candidate", "2DA44E", "Issue has a bounded remediation plan ready for approval"],
               ["devin-running", "1D76DB", "A bounded Devin remediation run owns this issue"],
