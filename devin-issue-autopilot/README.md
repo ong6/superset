@@ -154,7 +154,7 @@ GITHUB_TOKEN="$(gh auth token)" GITHUB_REPO=ong6/superset make report
 The exact report-only Actions dispatch is:
 
 ```bash
-gh workflow run devin-issue-autopilot.yml -f mode=report
+gh workflow run devin-issue-autopilot.yml --repo ong6/superset -f mode=report
 ```
 
 ## Guardrails
@@ -201,21 +201,23 @@ verified-and-merged outcomes. Every available terminal comment is retained,
 including failed attempts. Lifecycle comments updated in place by GitHub can
 expose only their latest durable body.
 
-The separate current issue-status/backlog table shows open active, excluded, and
-not-started Devin-labeled issues. Those rows are operational context only and
+The separate current issue-status/backlog table shows every open Devin-labeled
+issue with its label-derived state and next action, including triaging/running,
+queued requests, ready for approval/review, missing information, maintainer
+attention, and paused work. Those rows are operational context only and
 never enter attempt, failure, success-rate, timing, or usage denominators.
 
-Raw ACU telemetry preserves reported zero separately from missing data. It does
-not establish billing, monetary cost, savings, or free remediation, so the
-report suppresses per-success ratios when telemetry is incomplete. Live repair
-efficiency uses only nonsimulated remediation rows and the controller-verified
-denominator; triage, setup/build, and simulation telemetry is excluded. The
-`AUTOPILOT_DAILY_ACU_CAP` gate sums only reported usage in the current local
-SQLite cache; missing telemetry is not counted, and workflow runners use an
-ephemeral database, so it is not a durable cross-run or organization billing
-limit. Each remediation session is still created with a 4-ACU limit and a
-2400-second controller timeout with at most one nudge; triage uses
-`AUTOPILOT_TRIAGE_ACU_LIMIT` (default 1), a 600-second timeout, and no nudges.
+Usage figures are omitted from default reports and new lifecycle comments
+because a reliable usage source has not been verified. Raw values are retained
+internally for diagnostics. To inspect them explicitly, use
+`python -m autopilot report --devin --include-raw-usage`; this output is marked
+unverified, preserves zero separately from missing values, and must not be used
+to claim free work or savings. Existing historical comments are not rewritten.
+
+The runtime still applies its configured per-session limits. The local daily
+usage gate depends on available telemetry and a disposable runner cache; it is
+not durable organization-wide spend enforcement. These technical controls do
+not establish actual usage or cost.
 
 Workflow logs emit `transition issue=... run_id=... from=... to=...
 elapsed=...`, so `gh run view --log | grep transition` shows each run's state
@@ -229,3 +231,22 @@ changing the repository.
 This is a one-repository pilot. It does not merge pull requests, bypass branch
 protection, run on excluded issues, provide a shared queue, or verify patches in
 a separate clean-room publisher.
+
+## Maintainer and demo flow
+
+Use the [repository status links](../README.md#devin-workflow-current-issue-status)
+for day-to-day work. New/reopened issues start triage unless excluded. Adding
+`devin-triage` requests a fresh brief after clarification. A maintainer authorizes
+a repair with `/devin fix` or `devin-fix`; `/devin retry` requests another attempt.
+No manual Actions dispatch is needed for those normal events.
+
+Reports refresh after issue processing and daily at 06:17 UTC (14:17 Singapore
+time). Manual `mode=report` refresh is optional and read-only. Schedules can be
+delayed; always show the generation timestamp. PR merge state is refreshed by
+the next report, not continuously.
+
+For the prepared #48/#49 demo issues, keep `devin-exclude` until deliberately
+starting. Then remove it and add `devin-triage`, review the issue's brief, and
+approve with `/devin fix`. Removing exclusion alone is not a trigger. In the
+five-minute recording, show a completed issue/session/PR/check chain rather
+than waiting for a full repair. Keep genuine failures and pending work visible.

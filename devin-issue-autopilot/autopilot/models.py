@@ -136,8 +136,9 @@ class ReportBacklogIssue(BaseModel):
 
     issue: int
     issue_url: str
-    state: Literal["active", "excluded", "not started"]
+    state: str
     labels: list[str]
+    next_action: str
 
 
 class ReportCoverage(BaseModel):

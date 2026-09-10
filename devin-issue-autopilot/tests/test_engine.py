@@ -587,22 +587,20 @@ def test_writer_session_rejects_triage_output(tmp_path: Path) -> None:
     assert devin.create_calls == 1
 
 
-@pytest.mark.parametrize(
-    ("api_value", "expected"),
-    [(None, "| ACUs | unknown |"), (0, "| ACUs | 0.00 |")],
-)
-def test_terminal_comment_distinguishes_missing_and_zero_acus(
+@pytest.mark.parametrize("api_value", [None, 0, 2.5])
+def test_terminal_comment_omits_unverified_usage(
     tmp_path: Path,
     api_value: float | None,
-    expected: str,
 ) -> None:
     snapshot = exit_snapshot("https://github.com/ong6/superset/pull/10")
     snapshot["acus_consumed"] = api_value
     engine, _, github, item = setup_engine(tmp_path, [snapshot])
 
-    engine.run_issue(item, sleep=lambda _: None)
+    run = engine.run_issue(item, sleep=lambda _: None)
 
-    assert expected in str(github.comments[0]["body"])
+    assert "ACU" not in str(github.comments[0]["body"])
+    assert run.acus_reported == (api_value is not None)
+    assert run.acus == (api_value or 0)
 
 
 def test_branch_movement_rejects_stale_proposal(tmp_path: Path) -> None:
@@ -1129,6 +1127,7 @@ def test_report_rebuilds_from_fake_github_without_network(
         store,
         path=report_path,
         revision="397f034e4f09f238c4ff45acaa60cbc2239d7ad8",
+        include_raw_usage=True,
     )
 
     assert "- Repository: [ong6/superset](https://github.com/ong6/superset)" in markdown
@@ -1254,8 +1253,8 @@ def test_report_keeps_backlog_and_untrusted_legacy_evidence_out_of_metrics(
     assert "- Fix attempted: 2/3 runs" in markdown
     assert "- CI/policy verified: 1/2 fix attempts" in markdown
     assert "| [#48](https://github.com/ong6/superset/issues/48) | excluded |" in markdown
-    assert "| [#49](https://github.com/ong6/superset/issues/49) | active |" in markdown
-    assert "| [#50](https://github.com/ong6/superset/issues/50) | not started |" in markdown
+    assert "| [#49](https://github.com/ong6/superset/issues/49) | queued |" in markdown
+    assert "| [#50](https://github.com/ong6/superset/issues/50) | ready for approval |" in markdown
     assert (
         "| [#13](https://github.com/ong6/superset/issues/13) | "
         "[comment](https://github.com/ong6/superset/issues/13#issuecomment-1) | "
@@ -1338,6 +1337,7 @@ def test_report_reconciles_acus_from_devin_sessions(tmp_path: Path) -> None:
         Store(tmp_path / "autopilot.db"),
         ReportDevin(),
         tmp_path / "summary.md",
+        include_raw_usage=True,
     )
 
     assert "- ACUs total: 5.00 raw across 2/3 runs" in markdown
@@ -1415,7 +1415,7 @@ def test_report_separates_verified_open_and_verified_merged_prs(tmp_path: Path) 
         ),
     ]
 
-    markdown = write_report(runs, tmp_path / "summary.md")
+    markdown = write_report(runs, tmp_path / "summary.md", include_raw_usage=True)
 
     assert "- CI/policy verified: 2/2 fix attempts" in markdown
     assert "- Merged: 1/2 fix attempts" in markdown
@@ -1426,3 +1426,56 @@ def test_report_separates_verified_open_and_verified_merged_prs(tmp_path: Path) 
         "- Live repair ACUs per CI/policy-verified PR: "
         "3.00 raw (2/2 live repairs reported; not billing/cost)"
     ) in markdown
+
+
+def test_default_report_hides_usage_without_changing_raw_evidence(tmp_path: Path) -> None:
+    github = FakeGitHub.load_report(Path("fixtures/report.json"))
+    store = Store(tmp_path / "report.db")
+    markdown = rebuild_report(github, store, path=tmp_path / "summary.md")
+    assert "ACU" not in markdown
+    assert "Usage figures are omitted" in markdown
+    assert "- Fix attempted: 2/3 runs" in markdown
+    assert "- CI/policy verified: 1/2 fix attempts" in markdown
+    assert [run.acus for run in store.cached_report_runs()] == [3.5, 0.0, None]
+    diagnostics = rebuild_report(github, store, path=tmp_path / "raw.md", include_raw_usage=True)
+    assert "Raw usage diagnostics (unverified)" in diagnostics
+    assert "| unknown |" in diagnostics
+    assert "| 0.00 |" in diagnostics
+
+
+@pytest.mark.parametrize(
+    ("labels", "state", "action"),
+    [
+        (["devin-exclude", "devin-running"], "excluded", "Paused"),
+        (["devin-running", "devin-fix"], "running", "session link"),
+        (["devin-triaging", "devin-triage"], "triaging", "readiness brief"),
+        (["devin-fix"], "queued", "Repair requested"),
+        (["devin-retry"], "queued", "Retry requested"),
+        (["devin-triage"], "queued", "Triage requested"),
+        (["devin-needs-info", "devin-candidate"], "needs information", "requested details"),
+        (["devin-needs-maintainer"], "needs maintainer", "maintainer decision"),
+        (["devin-needs-human"], "needs attention", "Inspect the failure"),
+        (["devin-verified", "devin-candidate"], "ready for review", "current CI"),
+        (["devin-triaged", "devin-candidate"], "ready for approval", "/devin fix"),
+        (["devin-triaged"], "triaged", "Read the readiness brief"),
+        (["devin-triage-bug"], "not started", "devin-triage"),
+    ],
+)
+def test_open_issue_states_show_next_actions_without_counting_attempts(
+    tmp_path: Path, labels: list[str], state: str, action: str
+) -> None:
+    github = FakeGitHub.load_report(Path("fixtures/report.json"))
+    github.report_fixture = [
+        ReportIssue(
+            number=48,
+            url="https://github.com/ong6/superset/issues/48",
+            state="open",
+            labels=labels,
+            comments=[],
+        )
+    ]
+    markdown = rebuild_report(github, Store(":memory:"), path=tmp_path / "summary.md")
+    assert f"| [#48](https://github.com/ong6/superset/issues/48) | {state} |" in markdown
+    assert action in markdown
+    assert "- Fix attempted: 0/0 runs" in markdown
+    assert "not a session-health signal" in markdown

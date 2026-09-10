@@ -92,6 +92,9 @@ def triage(
 @app.command()
 def report(
     devin: bool = typer.Option(False, "--devin"),
+    include_raw_usage: bool = typer.Option(
+        False, "--include-raw-usage", help="Show unverified raw usage diagnostics."
+    ),
 ) -> None:
     """Rebuild and print the durable GitHub-backed report."""
 
@@ -110,6 +113,7 @@ def report(
             devin_client,
             repository=settings.github_repo,
             revision=os.getenv("AUTOPILOT_REPORT_REVISION", os.getenv("GITHUB_SHA", "unknown")),
+            include_raw_usage=include_raw_usage,
         ),
         nl=False,
     )

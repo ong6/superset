@@ -22,6 +22,34 @@ under the License.
 - [GitHub Issue Remediation Pilot](takehome/README.md)
 - [Devin Issue Autopilot](devin-issue-autopilot/README.md)
 
+### Devin workflow: current issue status
+
+Start with the issue queue. The readiness brief, session link, PR and next action
+stay on each issue. These links show current labels; use the session link to
+check progress rather than treating a label as a health signal.
+
+| Queue | Next action |
+|---|---|
+| [Triaging](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-triaging%20-label%3Adevin-exclude) · [Repair running](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-running%20-label%3Adevin-exclude) | Follow progress on the issue. |
+| [Ready for approval](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-candidate%20-label%3Adevin-exclude) | Review the readiness contract, then comment `/devin fix`. |
+| [Needs information](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-needs-info%20-label%3Adevin-exclude) | Add details, then add `devin-triage`. |
+| [Needs maintainer](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-needs-maintainer%20-label%3Adevin-exclude) · [Needs attention](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-needs-human%20-label%3Adevin-exclude) | Resolve the issue’s next action before retrying. |
+| [Ready for review](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-verified%20-label%3Adevin-exclude) | Review the PR and CI; decide whether to merge. |
+| [Paused](https://github.com/ong6/superset/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevin-exclude) | Leave paused until deliberately selected. |
+
+New or reopened issue → automatic triage → readiness brief → maintainer
+`/devin fix` → Devin session and PR → independent verification → human review.
+An excluded issue does not start automatically. For a prepared demo issue,
+remove `devin-exclude`, then add `devin-triage`; removing exclusion alone does
+not trigger work. Leave #48 and #49 paused until the demo is started deliberately.
+
+[Effectiveness reports and execution logs](https://github.com/ong6/superset/actions/workflows/devin-issue-autopilot.yml)
+are supporting evidence, not the approval interface. Reports refresh after issue
+processing and daily at 06:17 UTC (14:17 Singapore time); manual report refresh
+is optional. Each report shows its generation timestamp and can be downloaded
+from the run’s Artifacts section. A merge after a report was generated appears
+on the next refresh. Usage figures are omitted until a reliable source is verified.
+
 # Superset
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/license/apache-2-0)
