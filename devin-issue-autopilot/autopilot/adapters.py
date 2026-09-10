@@ -247,19 +247,45 @@ class DevinClient:
     def list_report_sessions(self) -> list[ReportSession]:
         """List autopilot sessions for optional report reconciliation."""
 
-        sessions: list[ReportSession] = []
-        after: str | None = None
-        while True:
-            params: dict[str, str | int | list[str]] = {
+        return self._list_sessions(
+            {
                 "first": 200,
                 "tags": ["autopilot"],
                 "repo_names": [self.repo],
             }
+        )
+
+    def acus_since(self, timestamp: float) -> float:
+        """Sum reported usage for controller sessions created after a timestamp."""
+
+        sessions = self._list_sessions(
+            {
+                "first": 200,
+                "created_after": int(timestamp),
+                "repo_names": [self.repo],
+            }
+        )
+        title_prefixes = (f"Fix {self.repo}#", f"Triage {self.repo}#")
+        return sum(
+            session.acus_consumed
+            for session in sessions
+            if session.acus_consumed is not None
+            and ("autopilot" in session.tags or session.title.startswith(title_prefixes))
+        )
+
+    def _list_sessions(
+        self,
+        params: dict[str, str | int | list[str]],
+    ) -> list[ReportSession]:
+        sessions: list[ReportSession] = []
+        after: str | None = None
+        while True:
+            page_params = dict(params)
             if after is not None:
-                params["after"] = after
+                page_params["after"] = after
             response = self.client.get(
                 f"/v3/organizations/{self.org_id}/sessions",
-                params=params,
+                params=page_params,
             )
             response.raise_for_status()
             page = ReportSessionsPage.model_validate(response.json())
@@ -704,6 +730,15 @@ class FakeDevin:
         self.get_calls = 0
         self.nudge_calls = 0
         self.delete_calls = 0
+        self.acus_since_calls: list[float] = []
+        self.acu_total = 0.0
+        self.acu_error: httpx.HTTPError | None = None
+
+    def acus_since(self, timestamp: float) -> float:
+        self.acus_since_calls.append(timestamp)
+        if self.acu_error is not None:
+            raise self.acu_error
+        return self.acu_total
 
     def create(self, issue: Issue, run: Run, prompt: str) -> SessionCreate:
         self.create_calls += 1

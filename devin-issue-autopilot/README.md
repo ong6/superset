@@ -79,7 +79,11 @@ GitHub access uses the workflow's short-lived `GITHUB_TOKEN`. Triage uses the
 separate read-only Devin identity, receives no session secrets, requires approval
 for actions, and is rejected if it opens a pull request. The workflow serializes
 work per issue, updates one durable lifecycle comment, and uses terminal request
-markers to prevent duplicate sessions.
+markers to prevent duplicate sessions. Each claimed job restores the controller
+SQLite database from an `actions/cache` prefix and saves a new cache entry after
+execution, including failure. This is best-effort persistence: concurrent jobs
+for different issues can restore the same snapshot and race when their divergent
+databases are saved.
 
 ## Reviewer walkthrough
 
@@ -183,7 +187,7 @@ gh workflow run devin-issue-autopilot.yml --repo ong6/superset -f mode=report
 
 | Guardrail | Enforcement |
 |---|---|
-| Daily ACU cap | Refuses new sessions at 20 ACUs by default |
+| Daily ACU cap | In both Actions and Compose, queries tagged or controller-titled Devin sessions created in the last 24 hours and refuses a new session at 20 reported ACUs by default. If that API call fails, Actions sums the best-effort restored SQLite cache while Compose sums the SQLite database on its named volume; the lifecycle comment identifies the fallback. |
 | Triage budget | Triage sessions are limited to 1 ACU and 10 minutes |
 | Wall clock | Deletes a session after 40 minutes, then polls for 2 minutes |
 | Label authorization | Requires the actor who applied the trigger label to have write access |
@@ -195,7 +199,7 @@ gh workflow run devin-issue-autopilot.yml --repo ong6/superset -f mode=report
 | No secrets | Devin receives `secret_ids: []`; tokens stay in the controller |
 | CI verification | Requires an open PR and successful named check run or commit status on its head SHA |
 | Issue linkage | Requires the pull request body to close the source issue |
-| Restart safety | Claims `new → creating` atomically, persists `session_id` before polling, and never blindly recreates it |
+| Restart safety | Both runtimes claim `new → creating` atomically, persist `session_id` before polling, and never blindly recreate it. Compose keeps the database on the `autopilot-data` volume. Actions restores and saves the database with `actions/cache`, so resume state is best-effort and concurrent jobs can race. |
 | Idempotent output | Updates one durable lifecycle comment and rejects duplicate terminal request markers |
 | Label reconciliation | Removes trigger and conflicting terminal labels before applying the outcome |
 | Workflow claim | Serializes by issue and rejects existing triage or remediation claims |
@@ -236,11 +240,17 @@ table for debugging; it preserves missing values as `unknown` and numeric zero
 without interpreting either as billing, cost, savings, or free work. Existing
 historical comments are not rewritten.
 
-The `AUTOPILOT_DAILY_ACU_CAP` gate sums only reported usage in the current local
-SQLite cache; missing telemetry is not counted, and workflow runners use an
-ephemeral database, so it is not a durable cross-run or organization billing
-limit. Each remediation session is still created with a 4-ACU limit and a
-2400-second controller timeout with at most one nudge; triage uses
+The `AUTOPILOT_DAILY_ACU_CAP` gate queries organization sessions created in the
+last 24 hours, keeps sessions carrying the `autopilot` tag or the controller's
+`Fix <repo>#` / `Triage <repo>#` title prefix, and sums reported ACUs. If the
+Devin sessions API fails, the gate falls back to local SQLite rows and records
+that source in the lifecycle comment. Compose keeps those rows on the
+`autopilot-data` volume. Actions restores and saves them through an immutable,
+run-specific cache entry under the stable `autopilot-db-<repository>-` prefix;
+concurrent jobs can race, so this fallback and restart persistence are
+best-effort rather than a shared lock or organization billing limit. Missing
+usage is not counted. Each remediation session is still created with a 4-ACU
+limit and a 2400-second controller timeout with at most one nudge; triage uses
 `AUTOPILOT_TRIAGE_ACU_LIMIT` (default 1), a 600-second timeout, and no nudges.
 
 Workflow logs emit `transition issue=... run_id=... from=... to=...

@@ -67,6 +67,7 @@ TERMINAL = {
 class DevinAdapter(Protocol):
     def create(self, issue: Issue, run: Run, prompt: str) -> SessionCreate: ...
     def create_triage(self, issue: Issue, run: Run, prompt: str) -> SessionCreate: ...
+    def acus_since(self, timestamp: float) -> float: ...
     def get(self, session_id: str) -> SessionSnapshot: ...
     def nudge(self, session_id: str) -> None: ...
     def delete(self, session_id: str) -> None: ...
@@ -227,12 +228,8 @@ class Engine:
             return self._finish(run, "policy_rejected", note=contract_error)
         if not self.github.labeler_authorized(run.issue_model):
             return self._finish(run, "policy_rejected", note="label actor is not authorized")
-        midnight = (
-            datetime.fromtimestamp(self.clock(), UTC)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp()
-        )
-        if self.store.acus_since(midnight) >= self.settings.daily_acu_cap:
+        run, cap_reached = self._check_daily_acu_cap(run, self.devin)
+        if cap_reached:
             return self._finish(run, "blocked", note="daily ACU cap reached")
         target = self.github.target()
         run = self.store.update(
@@ -444,12 +441,8 @@ class Engine:
             )
         if len(run.issue_title) > 256 or len(run.issue_body) > 20_000:
             return self._finish_triage(run, "triage_failed", note="issue content exceeds limits")
-        midnight = (
-            datetime.fromtimestamp(self.clock(), UTC)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp()
-        )
-        if self.store.acus_since(midnight) >= self.settings.daily_acu_cap:
+        run, cap_reached = self._check_daily_acu_cap(run, self.triage_devin)
+        if cap_reached:
             return self._finish_triage(run, "triage_failed", note="daily ACU cap reached")
         target = self.github.target()
         run = self.store.update(
@@ -591,6 +584,7 @@ class Engine:
                     ("Confidence", output.confidence),
                     ("Session", run.session_url or "not started"),
                     ("Target", self._target(run)),
+                    ("Usage guard", self._acu_guard(run)),
                     ("Outcome", f"**{output.outcome}**"),
                     ("Elapsed", f"{int(self.clock() - run.created)}s"),
                     ("Nudges", str(run.nudges)),
@@ -758,6 +752,7 @@ class Engine:
                     ("Status", "Triage stopped"),
                     ("Session", run.session_url or "not started"),
                     ("Target", self._target(run)),
+                    ("Usage guard", self._acu_guard(run)),
                     ("Outcome", f"**{outcome}**"),
                     ("Reason", self._github_text(note) or "Triage could not complete."),
                     ("Elapsed", f"{int(self.clock() - run.created)}s"),
@@ -796,6 +791,7 @@ class Engine:
             ("Session", run.session_url or "not started"),
             ("Pull request", run.pr_url or "none"),
             ("Target", self._target(run)),
+            ("Usage guard", self._acu_guard(run)),
             ("Verification", self._verification(run)),
             ("Outcome", "pending"),
             ("Run key", f"`{run.key}`"),
@@ -816,6 +812,7 @@ class Engine:
             ("Session", run.session_url or "not started"),
             ("Pull request", run.pr_url or "none"),
             ("Target", self._target(run)),
+            ("Usage guard", self._acu_guard(run)),
             ("Verification", self._terminal_verification(run)),
             ("Outcome", f"**{outcome}**"),
             ("Reason", self._github_text(note) or self._default_reason(outcome)),
@@ -861,6 +858,34 @@ class Engine:
         if run.target_branch and run.target_sha:
             return f"`{run.target_branch}@{run.target_sha}`"
         return "not pinned"
+
+    def _check_daily_acu_cap(
+        self,
+        run: Run,
+        devin: DevinAdapter,
+    ) -> tuple[Run, bool]:
+        window_start = self.clock() - 24 * 60 * 60
+        try:
+            total = devin.acus_since(window_start)
+            source = "Devin API"
+        except (httpx.HTTPError, ValueError):
+            total = self.store.acus_since(window_start)
+            source = "local SQLite fallback (Devin API query failed)"
+        run = self.store.update(
+            run.run_id,
+            acu_guard_source=source,
+            acu_guard_total=total,
+            updated=self.clock(),
+        )
+        return run, total >= self.settings.daily_acu_cap
+
+    def _acu_guard(self, run: Run) -> str:
+        if not run.acu_guard_source:
+            return "not checked"
+        return (
+            f"{run.acu_guard_source}: {run.acu_guard_total:g}/"
+            f"{self.settings.daily_acu_cap:g} ACUs in the last 24 hours"
+        )
 
     @staticmethod
     def _verification(run: Run) -> str:

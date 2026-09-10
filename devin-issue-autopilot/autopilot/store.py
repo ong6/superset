@@ -39,7 +39,9 @@ class Store:
               comment_id TEXT, structured_output TEXT NOT NULL DEFAULT '',
               verification_started REAL, pr_opened REAL,
               target_branch TEXT, target_sha TEXT,
-              summary TEXT NOT NULL DEFAULT ''
+              summary TEXT NOT NULL DEFAULT '',
+              acu_guard_source TEXT NOT NULL DEFAULT '',
+              acu_guard_total REAL NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS transitions (
               run_id TEXT NOT NULL, "from" TEXT, "to" TEXT NOT NULL,
@@ -66,11 +68,16 @@ class Store:
             "label_actor",
             "summary",
             "structured_output",
+            "acu_guard_source",
         ):
             if name not in columns:
                 self.connection.execute(
                     f"ALTER TABLE runs ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"
                 )
+        if "acu_guard_total" not in columns:
+            self.connection.execute(
+                "ALTER TABLE runs ADD COLUMN acu_guard_total REAL NOT NULL DEFAULT 0"
+            )
         if "acus_reported" not in columns:
             self.connection.execute(
                 "ALTER TABLE runs ADD COLUMN acus_reported INTEGER NOT NULL DEFAULT 0"
