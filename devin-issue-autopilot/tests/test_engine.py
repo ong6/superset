@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Sequence
 from hashlib import sha256
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from autopilot.models import (
     ReportSession,
     Run,
     SessionCreate,
+    SessionSnapshot,
     Settings,
 )
 from autopilot.store import Store
@@ -109,13 +111,13 @@ def triage_snapshot(labels: list[str] | None = None) -> dict[str, object]:
 
 def setup_engine(
     tmp_path: Path,
-    plan: list[dict[str, object]],
+    plan: Sequence[SessionSnapshot | dict[str, object]],
     files: list[str] | None = None,
     clock: Clock | None = None,
 ) -> tuple[Engine, FakeDevin, FakeGitHub, Issue]:
     item = issue()
     url = "https://github.com/ong6/superset/pull/10"
-    devin = FakeDevin({item.number: plan})
+    devin = FakeDevin({item.number: list(plan)})
     github = FakeGitHub(
         [item],
         {
@@ -135,13 +137,14 @@ def setup_engine(
     )
 
 
-def test_happy_path_opens_one_session_and_verifies(tmp_path: Path) -> None:
+def test_open_pr_with_passing_check_is_verified(tmp_path: Path) -> None:
     url = "https://github.com/ong6/superset/pull/10"
     engine, devin, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
 
     run = engine.run_issue(item, sleep=lambda _: None)
 
     assert run.state == "verified"
+    assert github.check_calls == [("a" * 40, "unit-tests (current)")]
     assert devin.create_calls == 1
     assert devin.get_calls == 1
     assert len(github.comments) == 1
@@ -151,6 +154,57 @@ def test_happy_path_opens_one_session_and_verifies(tmp_path: Path) -> None:
     assert "A bounded fixture failure." in body
     assert "### Acceptance output" in body
     assert "1 passed" in body
+
+
+def test_merged_pr_with_passing_check_is_verified_and_merged(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    github.prs[url].state = "closed"
+    github.prs[url].merged_at = "2026-09-10T07:11:47Z"
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "merged"
+    assert run.outcome == "merged"
+    assert run.ci == "success"
+    assert engine.store.live() == []
+    assert github.check_calls == [("a" * 40, "unit-tests (current)")]
+    assert github.comments[0]["outcome"] == "merged"
+    assert "Required verification passed before the pull request merged." in str(
+        github.comments[0]["body"]
+    )
+
+
+def test_merged_pr_with_failing_check_is_merged_unverified(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    github.prs[url].state = "closed"
+    github.prs[url].merged_at = "2026-09-10T07:11:47Z"
+    github.prs[url].checks = [("completed", "failure")]
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "merged_unverified"
+    assert run.outcome == "merged_unverified"
+    assert run.ci == "failure"
+    assert engine.store.live() == []
+    assert github.check_calls == [("a" * 40, "unit-tests (current)")]
+    assert github.comments[0]["outcome"] == "merged_unverified"
+
+
+def test_closed_unmerged_pr_is_pr_closed(tmp_path: Path) -> None:
+    url = "https://github.com/ong6/superset/pull/10"
+    engine, _, github, item = setup_engine(tmp_path, [exit_snapshot(url)])
+    github.prs[url].state = "closed"
+
+    run = engine.run_issue(item, sleep=lambda _: None)
+
+    assert run.state == "pr_closed"
+    assert run.outcome == "pr_closed"
+    assert engine.store.live() == []
+    assert github.check_calls == []
+    assert github.comments[0]["outcome"] == "pr_closed"
+    assert "The pull request was closed without merging." in str(github.comments[0]["body"])
 
 
 def test_acceptance_output_cannot_break_the_terminal_code_fence(tmp_path: Path) -> None:
@@ -711,6 +765,7 @@ def test_unauthorized_labeler_never_starts_session(tmp_path: Path) -> None:
 
 def test_retry_issue_is_discovered_and_terminal_labels_are_reconciled() -> None:
     deleted_labels: list[str] = []
+    applied_labels: list[list[str]] = []
     comment_body: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -771,6 +826,7 @@ def test_retry_issue_is_discovered_and_terminal_labels_are_reconciled() -> None:
             deleted_labels.append(path.rsplit("/", 1)[-1])
             return httpx.Response(404)
         if request.method == "POST" and path.endswith("/issues/7/labels"):
+            applied_labels.append(json.loads(request.content)["labels"])
             return httpx.Response(200, json=[])
         raise AssertionError(f"unexpected request: {request.method} {path}")
 
@@ -787,11 +843,22 @@ def test_retry_issue_is_discovered_and_terminal_labels_are_reconciled() -> None:
     assert comment_id == "99"
     assert repeated_comment_id == "99"
     assert comment_body[0].endswith("updated")
+    merged_comment_id = github.conclude(7, issues[0].key, "merged", "merged")
+    assert merged_comment_id == "99"
+    assert comment_body[0].endswith("merged")
+    assert applied_labels == [["devin-verified"], ["devin-verified"], ["devin-merged"]]
     assert deleted_labels == [
+        "devin-merged",
         "devin-needs-human",
         "devin-fix",
         "devin-retry",
         "devin-candidate",
+        "devin-merged",
+        "devin-needs-human",
+        "devin-fix",
+        "devin-retry",
+        "devin-candidate",
+        "devin-verified",
         "devin-needs-human",
         "devin-fix",
         "devin-retry",
@@ -1258,6 +1325,61 @@ def test_report_rebuilds_from_fake_github_without_network(
     assert [run.acus for run in cached] == [3.5, 0.0, None]
 
 
+def test_report_reclassifies_historical_no_pr_after_verified_merge(tmp_path: Path) -> None:
+    pr_url = "https://github.com/ong6/superset/pull/56"
+    github = FakeGitHub([], {})
+    github.report_fixture = [
+        ReportIssue(
+            number=55,
+            url="https://github.com/ong6/superset/issues/55",
+            state="closed",
+            body="## Expected\nCI check: `unit-tests (current)`",
+            labels=["devin-needs-human"],
+            comments=[
+                ReportComment(
+                    author="github-actions[bot]",
+                    body=(
+                        "<!-- devin-issue-autopilot:55 -->\n"
+                        "<!-- devin-issue-autopilot:5555555555555555 -->\n"
+                        "## Devin issue autopilot\n\n"
+                        "| Field | Value |\n"
+                        "|---|---|\n"
+                        "| Status | Stopped |\n"
+                        "| Started | 2026-09-10T07:00:00+00:00 |\n"
+                        "| Session | https://app.devin.ai/sessions/issue-55 |\n"
+                        f"| Pull request | {pr_url} |\n"
+                        "| Verification | pending |\n"
+                        "| Outcome | **no_pr** |\n"
+                        "| Elapsed | 720s |\n"
+                        "| Nudges | 0 |"
+                    ),
+                )
+            ],
+        )
+    ]
+    github.report_prs[pr_url] = ReportPullRequest(
+        state="merged",
+        created_at="2026-09-10T07:11:00+00:00",
+        head_sha="5" * 40,
+    )
+    github.report_checks["5" * 40] = ("completed", "success")
+
+    markdown = rebuild_report(
+        github,
+        Store(tmp_path / "autopilot.db"),
+        path=tmp_path / "summary.md",
+    )
+
+    assert (
+        "| [#55](https://github.com/ong6/superset/issues/55) (closed) | fix | github | "
+        "remediation | [session](https://app.devin.ai/sessions/issue-55) | merged | "
+        f"[PR]({pr_url}) (merged) | success | merged | 720s | 0 |"
+    ) in markdown
+    assert "- CI/policy verified: 1/1 fix attempts" in markdown
+    assert "- Verified-and-merged: 1/1 fix attempts" in markdown
+    assert "- needs-human: 0/1 runs" in markdown
+
+
 def test_report_keeps_backlog_and_untrusted_legacy_evidence_out_of_metrics(
     tmp_path: Path,
 ) -> None:
@@ -1361,6 +1483,11 @@ def test_report_keeps_backlog_and_untrusted_legacy_evidence_out_of_metrics(
             """Return fixture-backed pull request state."""
 
             return fixture.report_pr(url)
+
+        def report_check(self, sha: str, name: str) -> tuple[str, str | None]:
+            """Return fixture-backed required check state."""
+
+            return fixture.report_check(sha, name)
 
     class ReadOnlyDevin:
         """Expose only session listing, never session creation."""

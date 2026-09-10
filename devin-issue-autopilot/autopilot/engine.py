@@ -51,10 +51,13 @@ from autopilot.store import Store
 
 TERMINAL = {
     "verified",
+    "merged",
+    "merged_unverified",
     "check_skipped",
     "ci_failed",
     "policy_rejected",
     "no_pr",
+    "pr_closed",
     "blocked",
     "no_change",
     "timed_out",
@@ -92,6 +95,11 @@ class ReportGitHubAdapter(Protocol):
 
     def report_pr(self, url: str) -> ReportPullRequest:
         """Read the current state and creation time for a PR."""
+
+        ...
+
+    def report_check(self, sha: str, name: str) -> tuple[str, str | None]:
+        """Read a required check for a historical merged PR."""
 
         ...
 
@@ -352,8 +360,19 @@ class Engine:
         assert run.pr_url is not None
         pr_url = run.pr_url
         pr = self.github.resolve_pr(pr_url)
-        if pr.state != "open":
-            return self._finish(run, "no_pr")
+        if pr.merged_at is None and pr.state != "open":
+            return self._finish(run, "pr_closed")
+        if pr.merged_at is not None:
+            head_sha = pr.head_sha
+            run = self.store.update(run.run_id, head_sha=head_sha, updated=self.clock())
+            status, conclusion = self.github.check(head_sha, run.issue_model.check_name)
+            if status == "completed" and conclusion == "success":
+                return self._finish(run, "merged", ci="success")
+            return self._finish(
+                run,
+                "merged_unverified",
+                ci=str(conclusion) if status == "completed" else status,
+            )
         closing_reference = re.compile(
             rf"(?im)\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#"
             rf"{run.issue}\b"
@@ -883,16 +902,23 @@ class Engine:
 
     @staticmethod
     def _terminal_status(outcome: str) -> str:
-        return "Ready for review" if outcome == "verified" else "Stopped"
+        return {
+            "verified": "Ready for review",
+            "merged": "Merged",
+            "merged_unverified": "Merged without required verification",
+        }.get(outcome, "Stopped")
 
     @staticmethod
     def _default_reason(outcome: str) -> str:
         return {
             "verified": "Required verification passed.",
+            "merged": "Required verification passed before the pull request merged.",
+            "merged_unverified": "The pull request merged without passing required verification.",
             "check_skipped": "The required acceptance test did not run for this change set.",
             "ci_failed": "Required verification did not pass.",
             "policy_rejected": "The run violated remediation policy.",
             "no_pr": "No open pull request was available to verify.",
+            "pr_closed": "The pull request was closed without merging.",
             "blocked": "The session could not proceed without external input.",
             "no_change": "No code change was needed.",
             "timed_out": "The session exceeded the wall-clock limit.",
@@ -904,6 +930,11 @@ class Engine:
     def _next_action(outcome: str) -> str:
         return {
             "verified": "Review the linked pull request; merge only after maintainer approval.",
+            "merged": "No further action is required.",
+            "merged_unverified": (
+                "Review the merged change and failed verification before deciding whether "
+                "follow-up remediation is required."
+            ),
             "check_skipped": (
                 "Review the change manually and update its CI coverage before approval."
             ),
@@ -916,6 +947,7 @@ class Engine:
                 "`devin-triage` before approving another run."
             ),
             "no_pr": "Review the session result, then apply `devin-retry` if a fix is needed.",
+            "pr_closed": "Review why the pull request was closed, then retriage if needed.",
             "blocked": (
                 "Provide the required input or narrow the contract, then apply `devin-retry`."
             ),
@@ -1033,6 +1065,31 @@ def rebuild_report(
             run.pr_state = "unknown"
             continue
         run.pr_state = pull.state
+        if pull.state == "closed" and run.outcome == "no_pr":
+            run.state = "pr_closed"
+            run.outcome = "pr_closed"
+        elif pull.state == "merged" and run.outcome in {"no_pr", "pr_closed"}:
+            issue = next(item for item in issues if item.number == run.issue)
+            check_name = Issue(
+                number=issue.number,
+                title="",
+                body=issue.body,
+                label_at="report",
+            ).check_name
+            try:
+                status, conclusion = github.report_check(pull.head_sha, check_name)
+            except (KeyError, ValueError, httpx.HTTPStatusError):
+                status, conclusion = "unknown", None
+            if status == "completed" and conclusion == "success":
+                run.state = "merged"
+                run.outcome = "merged"
+                run.ci = "success"
+                run.needs_human = False
+            else:
+                run.state = "merged_unverified"
+                run.outcome = "merged_unverified"
+                run.ci = str(conclusion) if status == "completed" else status
+                run.needs_human = True
         started = _field_datetime(bodies[run.source_id], "Started")
         if started is not None:
             try:
@@ -1406,10 +1463,11 @@ def write_report(
     ]
     fix_attempted = len(fix_runs)
     pr_opened = sum(run.pr_url is not None for run in fix_runs)
-    controller_verified = sum(run.outcome == "verified" for run in fix_runs)
+    controller_verified = sum(run.outcome in {"verified", "merged"} for run in fix_runs)
     merged = sum(run.pr_state == "merged" for run in fix_runs)
     verified_and_merged = sum(
-        run.outcome == "verified" and run.pr_state == "merged" for run in fix_runs
+        run.outcome == "merged" or (run.outcome == "verified" and run.pr_state == "merged")
+        for run in fix_runs
     )
     pr_times = [run.time_to_pr for run in fix_runs if run.time_to_pr is not None]
     totals: list[tuple[str, str | int]] = [
@@ -1446,6 +1504,15 @@ def write_report(
         (
             "policy_rejected",
             f"{sum(run.outcome == 'policy_rejected' for run in fix_runs)}/{fix_attempted} fix attempts",
+        ),
+        (
+            "merged_unverified",
+            f"{sum(run.outcome == 'merged_unverified' for run in fix_runs)}/{fix_attempted} "
+            "fix attempts",
+        ),
+        (
+            "pr_closed",
+            f"{sum(run.outcome == 'pr_closed' for run in fix_runs)}/{fix_attempted} fix attempts",
         ),
         ("needs-human", f"{sum(run.needs_human for run in runs)}/{run_count} runs"),
         (
@@ -1537,10 +1604,9 @@ def write_report(
         + "\n\n"
         "## Terminal runs\n\n"
         "How to read this: rows preserve every trusted terminal GitHub Actions "
-        "comment; CI/policy verified is the controller's ready-for-review outcome, "
-        "while merged and verified-and-merged are separate measures.\n\n"
-        + "\n".join(table)
-        + "\n\n## Current issue status/backlog\n\n"
+        "comment; CI/policy verified includes verified open PRs and merged PRs whose "
+        "required check passed, while merged and verified-and-merged remain separate "
+        "measures.\n\n" + "\n".join(table) + "\n\n## Current issue status/backlog\n\n"
         "These open issue rows are status context only and are excluded from attempts, "
         "failures, success rates, timing, and usage denominators. Labels are a snapshot, "
         "not a session-health signal; follow the issue for live progress.\n\n"
