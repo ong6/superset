@@ -18,13 +18,15 @@ under the License.
 -->
 
 Reviewers: start with the
-[Devin Issue Autopilot solution](devin-issue-autopilot/README.md) for the
-verified Docker path, report evidence, controls, and detailed demo runbook.
+[Devin Issue Autopilot solution](https://github.com/ong6/devin-issue-autopilot) for the
+Docker simulation, controller tests, report evidence and setup instructions.
+This fork holds the selected issues and repair PRs; the solution repository holds
+the controller. The event workflow loads a pinned controller commit.
 
 ## Take-home
 
 - [GitHub Issue Remediation Pilot](takehome/README.md)
-- [Devin Issue Autopilot](devin-issue-autopilot/README.md)
+- [Devin Issue Autopilot](https://github.com/ong6/devin-issue-autopilot)
 
 ### Devin workflow: current issue status
 
