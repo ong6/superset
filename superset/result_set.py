@@ -42,8 +42,8 @@ def dedup(l: list[str], suffix: str = "__", case_sensitive: bool = True) -> list
     >>> print(','.join(dedup(['foo', 'bar', 'bar', 'bar', 'Bar'])))
     foo,bar,bar__1,bar__2,Bar
     >>> print(
-        ','.join(dedup(['foo', 'bar', 'bar', 'bar', 'Bar'], case_sensitive=False))
-    )
+    ...     ','.join(dedup(['foo', 'bar', 'bar', 'bar', 'Bar'], case_sensitive=False))
+    ... )
     foo,bar,bar__1,bar__2,Bar__3
     """
     new_l: list[str] = []
